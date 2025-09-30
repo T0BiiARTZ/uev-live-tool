@@ -60,15 +60,15 @@
       <div class="card">
         <label>OVR (min-max)</label>
         <div style="display:flex;gap:8px">
-          <input type="number" id="ovrMin" value="80" min="50" max="99" />
-          <input type="number" id="ovrMax" value="84" min="50" max="99" />
+          <input type="number" id="ovrMin" value="78" min="50" max="99" />
+          <input type="number" id="ovrMax" value="88" min="50" max="99" />
         </div>
       </div>
       <div class="card">
         <label>BIN-Bereich (min-max)</label>
         <div style="display:flex;gap:8px">
-          <input type="number" id="binMin" value="2000" min="0" step="100" />
-          <input type="number" id="binMax" value="50000" min="0" step="100" />
+          <input type="number" id="binMin" value="1500" min="0" step="100" />
+          <input type="number" id="binMax" value="60000" min="0" step="100" />
         </div>
       </div>
       <div class="card">
@@ -113,7 +113,7 @@ async function testAPI(){
   try{
     setStatus('Teste API…');
     const futdb=await api('/api/futdb?type=test');
-    const pop=await api('/api/popular-scrape?limit=20');
+    const pop=await api('/api/popular-scrape?limit=30');
     const price=await api('/api/price-scrape?name=Heung Min Son&platform=ps');
     alert('FUTDB: '+JSON.stringify(futdb)+'\nPOPULAR: '+(pop.items?.length||0)+' items\nSCRAPER: '+JSON.stringify(price));
     setStatus('API-Test abgeschlossen.', true);
@@ -152,39 +152,38 @@ async function createList(){
       // 1) Namen von FUT.GG
       const pop = await api('/api/popular-scrape?limit='+(size*3));
       const names = (pop && pop.items) ? pop.items.map(x=>x.name).filter(Boolean) : [];
-      if (!names.length){ setStatus('Popular-Liste leer.', false); tbody.innerHTML='<tr><td colspan="8">Keine Popular-Daten.</td></tr>'; return; }
 
-      // 2) Mehrere FUTDB-Seiten laden und per Name mappen => echte OVR/Pos
-      const pool = await fetchPlayersPaged(5); // bis zu 1000 Spieler
-      const byName = new Map();
-      for (const p of pool) byName.set(normName(p.name), p);
+      // 2) FUTDB-Pool laden und Namen mappen (für echte OVR/Pos) – wenn möglich
+      const pool = await fetchPlayersPaged(8); // bis zu ~1600 Spieler
+      const byName = new Map(); for (const p of pool) byName.set(normName(p.name), p);
 
+      // Kandidaten: gemappte FUTDB-Spieler ODER „Stub“ nur mit Name (OVR/Pos unbekannt)
       for (const n of names){
         const p = byName.get(normName(n));
-        if (p) candidates.push(p);
+        if (p) { candidates.push(p); }
+        else   { candidates.push({ name:n, position:'', rating:null, id:null }); }
       }
-      // zur Not: nicht gemappte Namen weglassen (wir brauchen echte OVR/Pos)
-      if (!candidates.length){ candidates = pool.slice(0, size*2); }
     } else {
-      // FODDER: viele FUTDB-Spieler laden, dann SBC-taugliche Positionen + hohe OVR
-      const pool = await fetchPlayersPaged(5);
+      // FODDER: FUTDB laden, SBC-taugliche Positionen + hohe OVR
+      const pool = await fetchPlayersPaged(8);
       candidates = pool.filter(p=>{
         const o=+(p.rating||0); const pos=(p.position||'').toUpperCase();
         const fodderPos = /GK|CB|LB|RB|LWB|RWB|CDM|CM/.test(pos);
         return o>=Math.max(82,ovrMin) && o<=Math.max(ovrMin,ovrMax) && fodderPos;
-      }).slice(0, size*3);
-      if (!candidates.length) candidates = pool.slice(0, size*3);
+      });
+      if (!candidates.length) candidates = pool.slice();
     }
 
-    // Jetzt strenger OVR-Filter (deine Eingabe)
+    // OVR-Filter nur anwenden, wenn eine OVR vorhanden ist (Popular/Played-Stubs behalten)
     candidates = candidates.filter(p=>{
-      const o=+(p.rating||0); return o>=ovrMin && o<=ovrMax;
+      const o = +(p.rating ?? p.ovr ?? 0);
+      if (!o) return true; // keine OVR → nicht rausfiltern
+      return o>=ovrMin && o<=ovrMax;
     });
 
-    if(!candidates.length){ setStatus('Keine passenden Kandidaten nach OVR-Filter.', false); tbody.innerHTML='<tr><td colspan="8">Kandidaten leer.</td></tr>'; return; }
+    if(!candidates.length){ setStatus('Kandidaten leer (Filter zu streng).', false); tbody.innerHTML='<tr><td colspan="8">Kandidaten leer.</td></tr>'; return; }
 
     const rows = [];
-    // profit-Schwellen dynamisch: 800 -> 700 -> 600, um Liste voll zu bekommen
     const wanted = size;
     const profitSteps = [800, 700, 600];
 
@@ -194,11 +193,11 @@ async function createList(){
       for (const p of candidates){
         if (rows.length >= wanted) break;
 
-        const name = p.name || '-';
+        const name = p.name || p.fullName || p.commonName || '-';
         const pos  = p.position || '';
-        const ovr  = +(p.rating||0) || '';
+        const ovr  = +(p.rating||p.ovr||0) || '';
 
-        // 1) Preis FUTDB -> 2) Scraper
+        // Preis: 1) FUTDB (nur wenn ID vorhanden) → 2) Scraper
         let bin = null;
         try{
           if (p.id){
@@ -225,14 +224,14 @@ async function createList(){
 
         rows.push({ name, pos, ovr, bin, chem:chemFor(pos), buy, sell, profit });
       }
-      if (rows.length >= Math.min(wanted, 5)) break; // ausreichend Treffer
+      if (rows.length >= Math.min(wanted, 5)) break;
     }
 
     rows.sort((a,b)=> b.profit - a.profit);
 
     tbody.innerHTML='';
     if(!rows.length){
-      tbody.innerHTML = '<tr><td colspan="8">Keine Deals im gesetzten Rahmen. Tipp: BIN-Bereich erweitern oder OVR leicht öffnen.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">Keine Deals im gesetzten Rahmen. Tipp: BIN-Bereich deutlich verbreitern (z. B. 1.5k–60k) oder OVR öffnen.</td></tr>';
       setStatus('Keine Deals gefunden.', false);
       return;
     }
@@ -253,7 +252,7 @@ async function createList(){
     setStatus('Fertig.', true);
   }catch(e){
     setStatus('Fehler: '+e.message, false);
-    tbody.innerHTML = '<tr><td colspan="8">Fehler beim Erstellen.</td></tr>';
+    document.getElementById('tbody').innerHTML = '<tr><td colspan="8">Fehler beim Erstellen.</td></tr>';
   }
 }
 
