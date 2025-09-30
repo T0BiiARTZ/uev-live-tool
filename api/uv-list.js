@@ -26,9 +26,21 @@ async function gentleFetch(url) {
 async function getBuildId() {
   const html = await gentleFetch("https://www.fut.gg/");
   const s = typeof html === "string" ? html : JSON.stringify(html);
-  const m = s.match(/"buildId"\s*:\s*"([^"]+)"/);
-  if (!m) throw new Error("FUT.GG buildId not found");
-  return m[1];
+
+  // alte Methode
+  let m = s.match(/"buildId"\s*:\s*"([^"]+)"/);
+  if (m) return m[1];
+
+  // neue Next.js Struktur: __NEXT_DATA__
+  const nextData = s.match(/__NEXT_DATA__\s*=\s*(\{[\s\S]+?\})<\/script>/);
+  if (nextData) {
+    try {
+      const json = JSON.parse(nextData[1]);
+      if (json?.buildId) return json.buildId;
+    } catch {}
+  }
+
+  throw new Error("FUT.GG buildId not found");
 }
 
 // Popular-Players JSON
