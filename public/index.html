@@ -8,7 +8,7 @@
     :root{--bg:#0f0f10;--panel:#161617;--ink:#f3f3f3;--muted:#9aa1a9;--line:#222;--accent:#f5a524;--good:#34d399;--bad:#ef4444}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,Roboto,Inter,Arial}
-    .box{max-width:1000px;margin:0 auto;padding:20px}
+    .box{max-width:1100px;margin:0 auto;padding:20px}
     h2{margin:0 0 6px 0}
     .sub{color:var(--muted);margin-bottom:10px}
     .row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:12px 0}
@@ -27,7 +27,7 @@
 </head>
 <body>
   <div class="box">
-    <h2>ÜV-Listen-Generator (Live via FUTDATABASE)</h2>
+    <h2>ÜV-Listen-Generator (Live via FUTDATABASE + FUT.GG Scrape)</h2>
     <div class="sub">EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800, Rundung 100 • Buy = BIN – Abschlag %</div>
 
     <div id="status" class="status">Bereit.</div>
@@ -86,7 +86,6 @@ function chemFor(pos){
   return 'Basic / Engine';
 }
 function roundTo(v,step){ return Math.round(v/step)*step; }
-
 async function api(path){
   const r = await fetch(path,{cache:'no-store'});
   const t = await r.text(); try { return JSON.parse(t); } catch { return {raw:t}; }
@@ -95,13 +94,22 @@ async function api(path){
 async function testAPI(){
   try{
     setStatus('Teste API…');
-    const j = await api('/api/futdb?type=test');
-    alert('API antwortet: ' + JSON.stringify(j));
-    setStatus('API-Test abgeschlossen.', j && j.ok===true);
+    const futdb = await api('/api/futdb?type=test');
+    const scrape = await api('/api/price-scrape?name=Kylian%20Mbappe&platform=ps');
+    alert('FUTDATABASE: ' + JSON.stringify(futdb) + '\nSCRAPER: ' + JSON.stringify(scrape));
+    setStatus('API-Test abgeschlossen.', true);
   }catch(e){
     alert('API-Fehler: ' + e.message);
     setStatus('API-Fehler: ' + e.message, false);
   }
+}
+
+// Meta-Filter: OVR 80–84 + sinnvolle Positionen
+function looksMeta(p){
+  const o = +(p.rating||p.ovr||0);
+  const pos = (p.position||'').toUpperCase();
+  const okPos = /ST|CF|LW|RW|LM|RM|CAM|CM|CDM|CB|LB|RB|GK/.test(pos);
+  return o>=80 && o<=84 && okPos;
 }
 
 async function createList(){
@@ -112,29 +120,42 @@ async function createList(){
   const tbody = document.getElementById('tbody');
 
   tbody.innerHTML = '<tr><td colspan="8">Erzeuge Liste…</td></tr>';
-  setStatus('Lade Spieler…');
+  setStatus('Lade Spieler aus FUTDATABASE…');
 
   try{
     const j = await api('/api/futdb?type=players');
-    const arr = (j && (j.items||j.data)) ? (j.items||j.data) : [];
-    if(!arr.length){ setStatus('Spieler-Endpoint liefert nichts.'); return; }
+    const arrAll = (j && (j.items||j.data)) ? (j.items||j.data) : [];
+    const arr = arrAll.filter(looksMeta).slice(0, size*2 || 100); // pick gute Kandidaten
+
+    if(!arr.length){ setStatus('Keine passenden Spieler gefunden.'); return; }
 
     tbody.innerHTML=''; let used=0;
+
     for (const p of arr){
       if (used >= size) break;
 
-      // Preis laden
+      // 1) Versuche FUTDATABASE-Preis (falls dein Plan es erlaubt)
       let bin = null;
       try {
         const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id||p.playerId)}&platform=${plat}`);
         if (pj && (pj.lowestBin||pj.bin||pj.price)) bin = pj.lowestBin||pj.bin||pj.price;
       } catch {}
 
+      // 2) Fallback: Scrape FUT.GG über den Namen
+      if (bin===null){
+        try{
+          const sj = await api(`/api/price-scrape?name=${encodeURIComponent(p.name||'')}&platform=${plat}`);
+          if (sj && sj.bin) bin = sj.bin;
+        }catch{}
+      }
+
       const hasPrice = bin!==null && isFinite(bin) && bin>0;
       let buy='—', sell='—', profit='—';
       if (hasPrice){
         buy = roundTo(bin*(1 - discount/100), 100);
-        sell = bin; // (einfach: bei dir gern auf Zielprofit umstellen)
+        // einfache Verkaufsempfehlung mit Zielprofit ~1k nach Tax
+        const targetProfit = 1000;
+        sell = roundTo((buy + targetProfit) / 0.95, 100);
         profit = Math.floor(sell*0.95 - buy);
         if (bin>budget || profit<800) continue; // Filter nur mit Price
       }
@@ -154,7 +175,7 @@ async function createList(){
     }
 
     if(!tbody.children.length){
-      tbody.innerHTML = '<tr><td colspan="8">Keine Ergebnisse (evtl. kein Preis-Zugriff im Plan oder Filter zu streng).</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">Keine Ergebnisse (Preisquelle liefert nichts oder Filter zu streng).</td></tr>';
     }
     setStatus('Fertig.', true);
   }catch(e){
