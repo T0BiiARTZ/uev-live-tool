@@ -1,13 +1,24 @@
-// api/futdb.js — Serverless-Proxy für FUTDB (futdb.app)
+// api/futdb.js — Proxy für FUTDB (futdb.app)
 const API_BASE = 'https://futdb.app/api';
-const TOKEN = '7a75b1d4-c076-831b-9566-a69a7e72c8c9'; // funktioniert sofort; später gern als Env-Var
+const TOKEN = '7a75b1d4-c076-831b-9566-a69a7e72c8c9'; // dein Key
 
-async function getJson(url) {
+async function call(url) {
   try {
-    const r = await fetch(url, { headers: { 'X-AUTH-TOKEN': TOKEN } });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return await r.json();
-  } catch { return null; }
+    const r = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        // beide Header senden, weil manche Dokus/Pläne unterschiedliche Namen nutzen
+        'X-AUTH-TOKEN': TOKEN,
+        'X-AUTH-KEY':   TOKEN,
+      }
+    });
+    const text = await r.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    return { ok: r.ok, status: r.status, json, text };
+  } catch (e) {
+    return { ok:false, status:0, text:String(e) };
+  }
 }
 
 module.exports = async (req, res) => {
@@ -16,34 +27,32 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { type, playerId, platform = 'ps' } = req.query || {};
+  const { type, playerId, platform='ps' } = req.query || {};
 
-  // 1) einfacher Reachability-Check
+  // TEST: zeigt uns Status & ggf. Fehltext
   if (type === 'test') {
-    const j = await getJson(`${API_BASE}/players?page=1&limit=1`);
-    return res.status(200).json({ ok: !!(j && j.items), base: API_BASE });
+    const r = await call(`${API_BASE}/players?page=1&limit=1`);
+    return res.status(200).json({ ok: !!(r.ok && r.json && r.json.items), status: r.status, base: API_BASE, hint: r.text?.slice(0,120) });
   }
 
-  // 2) Spielerlist (liefert items[])
   if (type === 'players') {
-    // Hole viele Spieler (mehrere Seiten falls nötig)
-    const j = await getJson(`${API_BASE}/players?page=1&limit=200`);
-    if (j && j.items) return res.status(200).json(j);
-    return res.status(502).json({ error: 'players endpoint failed' });
+    const r = await call(`${API_BASE}/players?page=1&limit=200`);
+    if (r.ok && r.json && r.json.items) return res.status(200).json(r.json);
+    return res.status(502).json({ error: 'players failed', status: r.status, hint: r.text?.slice(0,200) });
   }
 
-  // 3) Preise (FUTDB hat je nach Plan/Version unterschiedliche Pfade; wir probieren Varianten)
   if (type === 'price' && playerId) {
-    const tryPaths = [
+    const paths = [
       `${API_BASE}/players/${playerId}/price?platform=${platform}`,
       `${API_BASE}/price/${playerId}?platform=${platform}`,
-      `${API_BASE}/prices/${playerId}?platform=${platform}`
+      `${API_BASE}/prices/${playerId}?platform=${platform}`,
     ];
-    for (const u of tryPaths) {
-      const j = await getJson(u);
-      if (j && (j.lowestBin || j.bin || j.price)) return res.status(200).json(j);
+    for (const u of paths) {
+      const r = await call(u);
+      if (r.ok && r.json && (r.json.lowestBin || r.json.bin || r.json.price)) {
+        return res.status(200).json(r.json);
+      }
     }
-    // Kein Preis gefunden -> leere, aber gültige Antwort zurückgeben
     return res.status(200).json({ lowestBin: null });
   }
 
