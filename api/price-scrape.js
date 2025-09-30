@@ -26,31 +26,23 @@ async function fetchText(url) {
   }
 }
 
-// Robust: versuche mehrere HTML/JSON-Varianten von FUT.GG
+/** Sehr gezielt den aktuellen "LOWEST BIN" aus dem Info-Panel ziehen */
 function parseLowestBin(html) {
   if (!html) return null;
 
-  // 1) Expliziter Text "Lowest BIN"
-  let m = html.match(/Lowest\s*BIN[^0-9]{0,40}(\d{1,3}(?:[.,]\d{3})+)/i);
+  // 1) Block um "LOWEST BIN" suchen und dort die ERSTE Zahl nehmen (das ist der aktuelle Wert)
+  let block = html.match(/LOWEST\s*BIN[\s\S]{0,240}/i);
+  if (block) {
+    const m = block[0].match(/(\d{1,3}(?:[.,]\d{3})+)/);
+    if (m) return toCoins(m[1]); // z.B. "6,100" -> 6100
+  }
+
+  // 2) JSON-Varianten, falls vorhanden
+  let m = html.match(/"lowest(?:Price|_bin|Bin)"\s*:\s*(\d+)/i);
   if (m) return toCoins(m[1]);
 
-  // 2) JSON-Snippets, die oft im HTML eingebettet sind
-  m = html.match(/"lowest(?:Price|_bin)"\s*:\s*(\d+)/i);
-  if (m) return toCoins(m[1]);
-
-  m = html.match(/"lowestBin"\s*:\s*(\d+)/i);
-  if (m) return toCoins(m[1]);
-
-  // 3) „BIN … 5,700“ in diversen Boxen
-  m = html.match(/BIN[^0-9]{0,40}(\d{1,3}(?:[.,]\d{3})+)/i);
-  if (m) return toCoins(m[1]);
-
-  // 4) „Buy Now … 5,700“
+  // 3) Weitere Fallbacks (vorsichtig, um keine Historienzahlen zu erwischen)
   m = html.match(/Buy\s*Now[^0-9]{0,40}(\d{1,3}(?:[.,]\d{3})+)/i);
-  if (m) return toCoins(m[1]);
-
-  // 5) Datensätze mit data-Attributen
-  m = html.match(/data-(?:lowest|bin|price)=\"?(\d{3,7})\"?/i);
   if (m) return toCoins(m[1]);
 
   return null;
@@ -63,29 +55,22 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const name = (req.query?.name || '').trim();
-  const platform = (req.query?.platform || 'ps').toLowerCase();
   if (!name) return res.status(200).json({ bin: null, note: 'missing name' });
 
-  // 1) Spielersuche
+  // 1) Suche auf FUT.GG
   const q = encodeURIComponent(name);
   const searchUrl = `https://www.fut.gg/players/?name=${q}`;
   const searchHtml = await fetchText(searchUrl);
   if (!searchHtml) return res.status(200).json({ bin: null, note: 'search failed' });
 
-  // Erster Treffer-Link: /players/<id>-...
+  // Ersten Spieler-Link holen
   const m = searchHtml.match(/href="\/players\/(\d+)[^"]*"/i);
   if (!m) return res.status(200).json({ bin: null, note: 'no result' });
 
-  // 2) Spieler-Seite laden
+  // 2) Detailseite laden und aktuellen LOWEST BIN parsen
   const playerUrl = `https://www.fut.gg/players/${m[1]}/`;
   const pageHtml = await fetchText(playerUrl);
-  if (!pageHtml) return res.status(200).json({ bin: null, note: 'player page failed' });
-
-  // 3) BIN parsen
   const bin = parseLowestBin(pageHtml);
 
-  // Optional: falls FUT.GG künftig plattformspezifische BINs anzeigt,
-  // könntest du hier je nach "platform" differenzieren. Aktuell wird
-  // meist ein generischer Lowest BIN angezeigt.
   return res.status(200).json({ bin: bin ?? null });
 };
