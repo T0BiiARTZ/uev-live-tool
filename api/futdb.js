@@ -1,20 +1,20 @@
-// api/futdb.js — Proxy für FUTDB (futdb.app)
-const API_BASE = 'https://futdb.app/api';
+// api/futdb.js — Proxy für FUTDATABASE (api.futdatabase.com)
+const BASES = [
+  'https://api.futdatabase.com/api', // Hauptbasis
+  'https://api.futdatabase.com'      // Fallback
+];
 const TOKEN = '7a75b1d4-c076-831b-9566-a69a7e72c8c9'; // dein Key
 
-async function call(url) {
+async function req(url) {
   try {
     const r = await fetch(url, {
       headers: {
         'Accept': 'application/json',
-        // beide Header senden, weil manche Dokus/Pläne unterschiedliche Namen nutzen
-        'X-AUTH-TOKEN': TOKEN,
-        'X-AUTH-KEY':   TOKEN,
+        'X-AUTH-TOKEN': TOKEN
       }
     });
     const text = await r.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch {}
+    let json = null; try { json = JSON.parse(text); } catch {}
     return { ok: r.ok, status: r.status, json, text };
   } catch (e) {
     return { ok:false, status:0, text:String(e) };
@@ -29,32 +29,59 @@ module.exports = async (req, res) => {
 
   const { type, playerId, platform='ps' } = req.query || {};
 
-  // TEST: zeigt uns Status & ggf. Fehltext
+  // ---- 1) API-Test ---------------------------------------------------------
   if (type === 'test') {
-    const r = await call(`${API_BASE}/players?page=1&limit=1`);
-    return res.status(200).json({ ok: !!(r.ok && r.json && r.json.items), status: r.status, base: API_BASE, hint: r.text?.slice(0,120) });
+    for (const b of BASES) {
+      const r = await req(`${b}/players?limit=1&page=1`);
+      if (r.ok && r.json && (r.json.items || r.json.data)) {
+        return res.status(200).json({ ok:true, base:b });
+      }
+      // wenn 401/403 -> Key/Plan reicht nicht, aber Basis stimmt
+      if ([401,403].includes(r.status)) {
+        return res.status(200).json({ ok:false, base:b, status:r.status, hint:'Key/Plan erlaubt diesen Endpoint nicht' });
+      }
+    }
+    return res.status(200).json({ ok:false, status:520, hint:'Basis nicht erreichbar' });
   }
 
+  // ---- 2) Spielerliste ------------------------------------------------------
   if (type === 'players') {
-    const r = await call(`${API_BASE}/players?page=1&limit=200`);
-    if (r.ok && r.json && r.json.items) return res.status(200).json(r.json);
-    return res.status(502).json({ error: 'players failed', status: r.status, hint: r.text?.slice(0,200) });
+    for (const b of BASES) {
+      const urls = [
+        `${b}/players?limit=200&page=1`,
+        `${b}/api/players?limit=200&page=1` // extra Fallback
+      ];
+      for (const u of urls) {
+        const r = await req(u);
+        if (r.ok && r.json && (r.json.items || r.json.data)) {
+          return res.status(200).json(r.json);
+        }
+      }
+    }
+    return res.status(502).json({ error:'players failed' });
   }
 
+  // ---- 3) Preise (nur wenn dein Plan das darf) -----------------------------
   if (type === 'price' && playerId) {
-    const paths = [
-      `${API_BASE}/players/${playerId}/price?platform=${platform}`,
-      `${API_BASE}/price/${playerId}?platform=${platform}`,
-      `${API_BASE}/prices/${playerId}?platform=${platform}`,
-    ];
-    for (const u of paths) {
-      const r = await call(u);
-      if (r.ok && r.json && (r.json.lowestBin || r.json.bin || r.json.price)) {
-        return res.status(200).json(r.json);
+    for (const b of BASES) {
+      const urls = [
+        `${b}/players/${playerId}/price?platform=${platform}`,
+        `${b}/price/${playerId}?platform=${platform}`,
+        `${b}/prices/${playerId}?platform=${platform}`
+      ];
+      for (const u of urls) {
+        const r = await req(u);
+        if (r.ok && r.json && (r.json.lowestBin || r.json.bin || r.json.price)) {
+          return res.status(200).json(r.json);
+        }
+        if ([401,403].includes(r.status)) {
+          // Kein Preiszugriff im aktuellen Plan: gib leeres Preisfeld zurück
+          return res.status(200).json({ lowestBin: null, note: 'price endpoint not available for this plan' });
+        }
       }
     }
     return res.status(200).json({ lowestBin: null });
   }
 
-  return res.status(400).json({ error: 'bad request' });
+  return res.status(400).json({ error:'bad request' });
 };
