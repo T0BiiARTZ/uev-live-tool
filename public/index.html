@@ -1,279 +1,139 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
-  <title>ÜV-Listen-Generator (FUTDATABASE + Scraper)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ÜV-Listen-Generator (FUTDB + FUT.GG)</title>
   <style>
-    :root{--bg:#0f0f10;--panel:#161617;--ink:#f3f3f3;--muted:#9aa1a9;--line:#222;--accent:#f5a524;--good:#34d399;--bad:#ef4444}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,Roboto,Inter,Arial}
-    .box{max-width:1200px;margin:0 auto;padding:18px}
-    h2{margin:0 0 6px 0}
-    .sub{color:var(--muted);margin-bottom:12px}
-    .grid{display:grid;grid-template-columns: 1fr 1fr 1fr 1fr 1.2fr 1.6fr 1fr; gap:10px}
-    @media (max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
-    .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
-    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
-    input,select{width:100%;background:#1b1c1f;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px}
-    /* Breitere Zahleneingaben */
-    .wide{min-width:160px}
-    .range{display:flex;gap:8px}
-    .btn{border:1px solid #3a3a3a;background:#1f1f20;color:#fff;border-radius:12px;padding:10px 14px;cursor:pointer}
-    .btn.primary{background:var(--accent);color:#111;border-color:#b77d10;font-weight:700}
-    table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:12px}
-    th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
-    thead th{background:#121314;color:#c8cbd0}
-    .status{margin:6px 0 10px 0;color:var(--muted)}
-    .ok{color:var(--good)} .err{color:var(--bad)}
-    .note{color:var(--muted);font-size:13px;margin-top:6px}
+    body{background:#0b0d10;color:#eaeef2;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;line-height:1.35;margin:20px}
+    h1{font-size:20px;margin:0 0 12px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+    .card{background:#12161b;border:1px solid #1c2330;border-radius:10px;padding:12px}
+    label{display:block;font-size:12px;color:#9fb0c3;margin-bottom:6px}
+    input,select,button{background:#0f1318;color:#eaeef2;border:1px solid #1f2836;border-radius:8px;padding:9px 10px;font-size:14px}
+    input:focus,select:focus,button:focus{outline:2px solid #3b82f6}
+    button.primary{background:#f59e0b;border-color:#f59e0b;color:#121212;font-weight:600}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{padding:10px;border-bottom:1px solid #1d2635}
+    th{font-size:12px;text-transform:uppercase;color:#9fb0c3;text-align:left}
+    .muted{color:#9fb0c3;font-size:12px}
+    .ok{color:#22c55e}
+    .bad{color:#ef4444}
+    .pill{font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid #2a3445;background:#0f1318;color:#9fb0c3}
   </style>
 </head>
 <body>
-  <div class="box">
-    <h2>ÜV-Listen-Generator (Live via FUTDATABASE + FUT.GG Scraper)</h2>
-    <div class="sub">EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800 (fällt bei Bedarf bis 500), Rundung 100 • Buy = BIN – Abschlag %</div>
-
-    <div id="status" class="status">Bereit.</div>
-
-    <div class="grid">
-      <div class="card">
-        <label>Modus</label>
+  <h1>ÜV-Listen-Generator (Live via FUTDATABASE + FUT.GG)</h1>
+  <div class="card">
+    <div class="row">
+      <div><label>Modus</label>
         <select id="mode">
           <option value="popular">Popular Player</option>
           <option value="played">Viel gespielt</option>
-          <option value="fodder">Fodder (SBC-Futter)</option>
+          <option value="fodder">Fodder (SBC)</option>
         </select>
       </div>
-      <div class="card">
-        <label>Plattform</label>
+      <div><label>Plattform</label>
         <select id="platform">
           <option value="ps">Playstation</option>
           <option value="xbox">Xbox</option>
           <option value="pc">PC</option>
         </select>
       </div>
-      <div class="card">
-        <label>Budget (Coins)</label>
-        <input type="number" id="budget" class="wide" value="100000" min="1000" step="1000" />
-      </div>
-      <div class="card">
-        <label>Listengröße</label>
-        <input type="number" id="size" class="wide" value="50" min="1" max="300" />
-      </div>
-      <div class="card">
-        <label>OVR (min-max)</label>
-        <div class="range">
-          <input type="number" id="ovrMin" class="wide" value="78" min="50" max="99" />
-          <input type="number" id="ovrMax" class="wide" value="88" min="50" max="99" />
-        </div>
-      </div>
-      <div class="card">
-        <label>BIN-Bereich (min-max)</label>
-        <div class="range">
-          <input type="number" id="binMin" class="wide" value="1500" min="0" step="100" />
-          <input type="number" id="binMax" class="wide" value="60000" min="0" step="100" />
-        </div>
-      </div>
-      <div class="card">
-        <label>Abschlag (%)</label>
-        <input type="number" id="discount" class="wide" value="3" min="0" max="30" step="0.5" />
+      <div><label>Budget (Coins)</label><input id="budget" type="number" value="100000"/></div>
+      <div><label>Listengröße</label><input id="size" type="number" value="50"/></div>
+      <div><label>OVR (min)</label><input id="ovrMin" type="number" value="78"/></div>
+      <div><label>OVR (max)</label><input id="ovrMax" type="number" value="88"/></div>
+      <div><label>BIN min</label><input id="binMin" type="number" value="1500"/></div>
+      <div><label>BIN max</label><input id="binMax" type="number" value="60000"/></div>
+      <div><label>Abschlag (%)</label><input id="discount" type="number" value="3"/></div>
+      <div><label>Quelle</label>
+        <select id="prefer">
+          <option value="auto">FUTDB + Scraper (empfohlen)</option>
+          <option value="futdb">Nur FUTDB-Preise</option>
+          <option value="scraper">Nur FUT.GG-Scraper</option>
+        </select>
       </div>
     </div>
-
-    <div style="display:flex;gap:10px;margin:8px 0 12px">
-      <button class="btn primary" id="btnMake">Erstellen</button>
-      <button class="btn" id="btnTest">API testen</button>
+    <div class="row">
+      <button class="primary" id="btnBuild">Erstellen</button>
+      <button id="btnTest">API testen</button>
+      <span id="status" class="muted"></span>
     </div>
+  </div>
 
+  <div class="card" style="margin-top:12px">
     <table>
       <thead>
         <tr>
-          <th>Spieler</th><th>Pos</th><th>OVR</th><th>BIN</th>
-          <th>Quelle</th><th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th>
+          <th>Spieler</th><th>Pos</th><th>OVR</th><th>BIN</th><th>Quelle</th>
+          <th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th>
         </tr>
       </thead>
-      <tbody id="tbody">
-        <tr><td colspan="9" style="color:#9aa1a9">Noch keine Liste.</td></tr>
-      </tbody>
+      <tbody id="rows"><tr><td colspan="9" class="muted">Noch keine Liste.</td></tr></tbody>
     </table>
-    <div class="note">Hinweis: Wenn FUT.GG temporär blockt, kommen Preise primär über den Scraper verzögert/vereinzelt. Bei Bedarf 2–3× „Erstellen“ klicken.</div>
   </div>
 
 <script>
-const statusEl = document.getElementById('status');
-function setStatus(msg, ok=null){ statusEl.textContent = msg; statusEl.className = 'status' + (ok===true?' ok':(ok===false?' err':'')); }
-function chemFor(pos){
-  const p=(pos||'').toUpperCase();
-  const atk=/ST|CF|LW|RW|LM|RM|CAM|CM|RF|LF/.test(p), def=/CB|LB|RB|LWB|RWB|CDM/.test(p);
-  if(atk) return 'Hunter / Engine / Finisher';
-  if(def) return (p==='CB'||p==='CDM') ? 'Shadow / Anchor' : 'Shadow';
-  return p==='GK' ? 'Basic' : 'Basic / Engine';
-}
-function roundTo(v,step){ return Math.round(v/step)*step; }
-async function api(path){ const r=await fetch(path,{cache:'no-store'}); const t=await r.text(); try{ return JSON.parse(t);}catch{return{raw:t}}; }
-function normName(s){ return (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim(); }
+const $ = id => document.getElementById(id);
+function fmt(n){ return (n||0).toLocaleString('de-DE'); }
 
-async function testAPI(){
+$('btnTest').onclick = async () => {
+  $('status').textContent = 'Teste API...';
   try{
-    setStatus('Teste API…');
-    const futdb=await api('/api/futdb?type=test');
-    const pop=await api('/api/popular-scrape?limit=60');
-    const price=await api('/api/price-scrape?name=Heung Min Son&platform=ps');
-    alert('FUTDB: '+JSON.stringify(futdb)+'\nPOPULAR: '+(pop.items?.length||0)+' items\nSCRAPER: '+JSON.stringify(price));
-    setStatus('API-Test abgeschlossen.', true);
-  }catch(e){ alert('API-Fehler: '+e.message); setStatus('API-Fehler: '+e.message,false); }
-}
+    const r = await fetch('/api/futdb?type=test').then(r=>r.json());
+    const ok = r.ok ? 'ok' : 'bad';
+    $('status').innerHTML = `FUTDB: <span class="${ok}">${r.ok}</span> (base: ${r.base||'-'})`;
+  }catch(e){ $('status').textContent = 'Test fehlgeschlagen.'; }
+};
 
-async function fetchPlayersPaged(pages, limit=200){
-  const out=[]; for(let page=1; page<=pages; page++){
-    const j=await api(`/api/futdb?type=players&page=${page}&limit=${limit}`);
-    const arr=(j&&(j.items||j.data))?(j.items||j.data):[];
-    out.push(...arr);
-    if(arr.length<limit) break;
-  }
-  return out;
-}
+$('btnBuild').onclick = async () => {
+  const qs = new URLSearchParams({
+    mode: $('mode').value,
+    platform: $('platform').value,
+    size: $('size').value,
+    ovrMin: $('ovrMin').value,
+    ovrMax: $('ovrMax').value,
+    binMin: $('binMin').value,
+    binMax: $('binMax').value,
+    discount: $('discount').value,
+    prefer: $('prefer').value
+  }).toString();
 
-async function priceFor(name, futdbId, plat){
-  // 1) FUTDB (wenn ID vorhanden)
-  if (futdbId){
-    try{
-      const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(futdbId)}&platform=${plat}`);
-      if (pj && (pj.lowestBin||pj.bin||pj.price)) {
-        return { bin: (pj.lowestBin||pj.bin||pj.price), src: 'FUTDB' };
-      }
-    }catch{}
-  }
-  // 2) Scraper FUT.GG
-  try{
-    const sj = await api(`/api/price-scrape?name=${encodeURIComponent(name)}&platform=${plat}`);
-    if (sj && sj.bin) return { bin: sj.bin, src: 'SCRAPER' };
-  }catch{}
-  // 3) Kein Preis
-  return { bin:null, src:'—' };
-}
-
-async function createList(){
-  const mode = document.getElementById('mode').value;
-  const plat = document.getElementById('platform').value;
-  const budget = +document.getElementById('budget').value||0;
-  const size = +document.getElementById('size').value||0;
-  const ovrMin = +document.getElementById('ovrMin').value||0;
-  const ovrMax = +document.getElementById('ovrMax').value||99;
-  const binMin = +document.getElementById('binMin').value||0;
-  const binMax = +document.getElementById('binMax').value||1e9;
-  const discount = +document.getElementById('discount').value||0;
-  const tbody = document.getElementById('tbody');
-
-  tbody.innerHTML = '<tr><td colspan="9">Erzeuge Liste…</td></tr>';
-  setStatus('Sammle Kandidaten…');
+  $('status').textContent = 'Erzeuge Liste...';
+  $('rows').innerHTML = `<tr><td colspan="9" class="muted">Erzeuge Liste...</td></tr>`;
 
   try{
-    let candidates = [];
-
-    if (mode === 'popular' || mode === 'played'){
-      // Namen holen (viel mehr als benötigt, um Blocker/Fehler abzufangen)
-      const pop = await api('/api/popular-scrape?limit='+(size*5));
-      const names = (pop && pop.items) ? pop.items.map(x=>x.name).filter(Boolean) : [];
-      if (!names.length){ setStatus('Popular-Daten leer (Scrape blockiert). Versuche erneut.', false); tbody.innerHTML='<tr><td colspan="9">Keine Popular-Daten (Scraper blockiert).</td></tr>'; return; }
-
-      // FUTDB-Pool laden und Namen mappen (OVR/Pos wenn möglich)
-      const pool = await fetchPlayersPaged(10); // bis ~2000 Spieler
-      const byName = new Map(); for (const p of pool) byName.set(normName(p.name), p);
-
-      for (const n of names){
-        const p = byName.get(normName(n));
-        if (p) candidates.push(p);
-        else   candidates.push({ name:n, position:'', rating:null, id:null }); // Stub ohne OVR/Pos
-      }
-    } else {
-      // FODDER
-      const pool = await fetchPlayersPaged(10);
-      candidates = pool.filter(p=>{
-        const o=+(p.rating||0); const pos=(p.position||'').toUpperCase();
-        const fodderPos = /GK|CB|LB|RB|LWB|RWB|CDM|CM/.test(pos);
-        return o>=Math.max(82,ovrMin) && o<=Math.max(ovrMin,ovrMax) && fodderPos;
-      });
-      if (!candidates.length) candidates = pool.slice();
+    const data = await fetch('/api/uv-list?'+qs).then(r=>r.json());
+    if (!data.ok) {
+      $('status').innerHTML = `<span class="bad">Fehler:</span> ${data.error||'Unbekannt'}`;
+      $('rows').innerHTML = `<tr><td colspan="9" class="muted">Keine Liste.</td></tr>`;
+      return;
     }
+    $('status').innerHTML = `Fertig. Preis-Treffer: <span class="ok">${data.priceHits}</span> — Einträge: ${data.items.length}`;
 
-    // OVR-Filter nur anwenden, wenn OVR existiert (Popular-Stubs behalten)
-    candidates = candidates.filter(p=>{
-      const o = +(p.rating ?? p.ovr ?? 0);
-      if (!o) return true;
-      return o>=ovrMin && o<=ovrMax;
-    });
-
-    if(!candidates.length){ setStatus('Kandidaten leer (Filter zu streng).', false); tbody.innerHTML='<tr><td colspan="9">Kandidaten leer.</td></tr>'; return; }
-
-    const rows = [];
-    const wanted = size;
-    const profitSteps = [800, 700, 600, 500];
-    let priceHits = 0;
-
-    for (const minProfit of profitSteps){
-      rows.length = 0; priceHits = 0;
-
-      // viele Kandidaten probieren
-      for (const p of candidates){
-        if (rows.length >= wanted) break;
-
-        const name = p.name || p.fullName || p.commonName || '-';
-        const pos  = p.position || '';
-        const ovr  = +(p.rating||p.ovr||0) || '';
-
-        const priced = await priceFor(name, p.id, plat);
-        const bin = priced.bin; const src = priced.src;
-        if (bin!=null && isFinite(bin) && bin>0) priceHits++;
-
-        if (bin==null || !isFinite(bin) || bin<=0) continue;
-        if (bin < binMin || bin > binMax) continue;
-        if (bin > budget) continue;
-
-        const buy = roundTo(bin*(1 - discount/100), 100);
-        const sell = roundTo((buy + 1000) / 0.95, 100);
-        const profit = Math.floor(sell*0.95 - buy);
-        if (profit < minProfit) continue;
-
-        rows.push({ name, pos, ovr, bin, src, chem:chemFor(pos), buy, sell, profit });
-      }
-      if (rows.length >= Math.min(wanted, 5)) break;
-    }
-
-    rows.sort((a,b)=> b.profit - a.profit);
-
-    tbody.innerHTML='';
-    if(!rows.length){
-      const msg = `Keine Deals im gesetzten Rahmen. Preis-Treffer: ${priceHits}. Tipp: BIN-Bereich erhöhen (z. B. 1.5k–60k), ggf. nochmal „Erstellen“ (Scraper kann blocken).`;
-      tbody.innerHTML = `<tr><td colspan="9">${msg}</td></tr>`;
-      setStatus('Keine Deals gefunden.', false);
+    if (!data.items.length) {
+      $('rows').innerHTML = `<tr><td colspan="9" class="muted">Keine Deals im gesetzten Rahmen. Tipp: BIN-Bereich verbreitern (z. B. 1.5k–60k) oder OVR öffnen.</td></tr>`;
       return;
     }
 
-    for (const r of rows){
-      const tr=document.createElement('tr');
-      tr.innerHTML = `
-        <td>${r.name}</td>
-        <td>${r.pos||'—'}</td>
-        <td>${r.ovr||'—'}</td>
-        <td>${r.bin.toLocaleString('de-DE')}</td>
-        <td>${r.src}</td>
-        <td>${r.chem}</td>
-        <td>${r.buy.toLocaleString('de-DE')}</td>
-        <td>${r.sell.toLocaleString('de-DE')}</td>
-        <td>+${r.profit.toLocaleString('de-DE')}</td>`;
-      tbody.appendChild(tr);
-    }
-    setStatus('Fertig.', true);
+    $('rows').innerHTML = data.items.map(it => `
+      <tr>
+        <td>${it.name}</td>
+        <td>${it.pos||''}</td>
+        <td>${it.ovr||''}</td>
+        <td>${fmt(it.bin)}</td>
+        <td><span class="pill">${it.src}</span></td>
+        <td>${it.chem||''}</td>
+        <td>${fmt(it.buy)}</td>
+        <td>${fmt(it.sell)}</td>
+        <td><strong>${fmt(it.profit)}</strong></td>
+      </tr>`).join('');
   }catch(e){
-    setStatus('Fehler: '+e.message, false);
-    document.getElementById('tbody').innerHTML = '<tr><td colspan="9">Fehler beim Erstellen.</td></tr>';
+    $('status').innerHTML = `<span class="bad">Fehlgeschlagen:</span> ${e.message}`;
+    $('rows').innerHTML = `<tr><td colspan="9" class="muted">Keine Liste.</td></tr>`;
   }
-}
-
-document.getElementById('btnTest').addEventListener('click', testAPI);
-document.getElementById('btnMake').addEventListener('click', createList);
+};
 </script>
 </body>
 </html>
