@@ -70,6 +70,20 @@ async function testAPI(){
   }
 }
 
+<script>
+const statusEl = document.getElementById('status');
+function setStatus(text, ok=false){ statusEl.className = ok ? 'ok' : 'err'; statusEl.textContent = text; }
+
+async function testAPI(){
+  try{
+    setStatus('Teste API…');
+    const r = await fetch('/api/futdb?type=test', { cache: 'no-store' });
+    const txt = await r.text(); let j=null; try{ j=JSON.parse(txt);}catch{}
+    alert('API antwortet: ' + (j ? JSON.stringify(j) : txt.slice(0,180)));
+    setStatus('API-Test abgeschlossen.', true);
+  }catch(e){ alert('API-Fehler: ' + e.message); setStatus('API-Fehler: ' + e.message); }
+}
+
 async function createList(){
   const plat = document.getElementById('platform').value;
   const budget = parseInt(document.getElementById('budget').value||'0',10);
@@ -81,35 +95,52 @@ async function createList(){
 
   try{
     const r = await fetch('/api/futdb?type=players', { cache: 'no-store' });
-    const txt = await r.text();
-    let j=null; try{ j=JSON.parse(txt);}catch{}
-    if(!j || !(j.items||j.data)){ setStatus('Spieler-Endpunkt liefert nichts: ' + txt.slice(0,140)); return; }
-    const arr = j.items || j.data;
-    tbody.innerHTML='';
-    let used=0;
+    const txt = await r.text(); let j=null; try{ j=JSON.parse(txt);}catch{}
+    const arr = (j && (j.items||j.data)) ? (j.items||j.data) : [];
+    if(!arr.length){ setStatus('Spieler-Endpunkt liefert nichts: ' + (txt||'leer').slice(0,140)); return; }
+
+    tbody.innerHTML=''; let used=0;
     for(const p of arr){
       if(used>=size) break;
-      const pr = await fetch(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id||p.playerId)}&platform=${plat}`, { cache: 'no-store' });
-      const ptxt = await pr.text();
-      let pj=null; try{ pj=JSON.parse(ptxt);}catch{}
-      const bin = pj && (pj.lowestBin||pj.bin||pj.price) ? (pj.lowestBin||pj.bin||pj.price) : null;
 
-      // Ohne Preis: Skipp oder zeig "—"
-      if(bin===null){ continue; }
+      // Preis laden
+      let bin = null;
+      try{
+        const pr = await fetch(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id||p.playerId)}&platform=${plat}`, { cache: 'no-store' });
+        const ptxt = await pr.text(); let pj=null; try{ pj=JSON.parse(ptxt);}catch{}
+        bin = pj && (pj.lowestBin||pj.bin||pj.price) ? (pj.lowestBin||pj.bin||pj.price) : null;
+      }catch{}
 
-      if(bin<=0 || bin>budget) continue;
-      const buy = Math.floor((bin*(1-discount/100))/100)*100;
-      const sell = bin; // simple: bei dir gern anpassen
-      const profit = Math.floor(sell*0.95 - buy);
-      if(profit<800) continue;
+      // Fallback, wenn kein Preis verfügbar ist
+      const hasPrice = bin !== null && isFinite(bin) && bin>0;
+      const buy  = hasPrice ? Math.floor((bin*(1-discount/100))/100)*100 : '—';
+      const sell = hasPrice ? bin : '—';
+      const profit = hasPrice ? Math.floor(sell*0.95 - buy) : '—';
+
+      // Budget- und Mindestprofit-Filter nur anwenden, wenn Preis vorhanden
+      if(hasPrice){
+        if(bin>budget) continue;
+        if(profit<800) continue;
+      }
 
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${p.name||'-'}</td><td>${p.position||'-'}</td><td>${p.rating||p.ovr||'-'}</td><td>${bin}</td><td>${p.chemistry_style||'-'}</td><td>${buy}</td><td>${sell}</td><td>${profit}</td>`;
+      tr.innerHTML = `
+        <td>${p.name||'-'}</td>
+        <td>${p.position||'-'}</td>
+        <td>${p.rating||p.ovr||'-'}</td>
+        <td>${hasPrice ? bin.toLocaleString('de-DE') : '—'}</td>
+        <td>${p.chemistry_style||'-'}</td>
+        <td>${hasPrice ? buy.toLocaleString('de-DE') : '—'}</td>
+        <td>${hasPrice ? sell.toLocaleString('de-DE') : '—'}</td>
+        <td>${hasPrice ? ('+'+profit.toLocaleString('de-DE')) : '—'}</td>`;
       tbody.appendChild(tr);
       used++;
     }
+
+    if(!tbody.children.length){
+      tbody.innerHTML='<tr><td colspan="8">Keine Ergebnisse (Preis-Endpunkt evtl. nicht im Plan – Liste zeigt dann keine käuflichen Karten). </td></tr>';
+    }
     setStatus('Fertig.', true);
-    if(!tbody.children.length){ tbody.innerHTML='<tr><td colspan="8">Keine Ergebnisse (Budget/Abschlag prüfen oder Preis-Endpunkt im Plan nicht verfügbar).</td></tr>'; }
   }catch(e){
     setStatus('Fehler: ' + e.message);
     tbody.innerHTML='<tr><td colspan="8">Fehler beim Erstellen.</td></tr>';
@@ -119,5 +150,6 @@ async function createList(){
 document.getElementById('btnTest').addEventListener('click', testAPI);
 document.getElementById('btnMake').addEventListener('click', createList);
 </script>
+
 </body>
 </html>
