@@ -36,9 +36,9 @@
       <div class="card">
         <label>Modus</label>
         <select id="mode">
-          <option value="fodder">Fodder (SBC-Futter)</option>
           <option value="popular">Popular Player</option>
           <option value="played">Viel gespielt</option>
+          <option value="fodder">Fodder (SBC-Futter)</option>
         </select>
       </div>
       <div class="card">
@@ -68,7 +68,7 @@
         <label>BIN-Bereich (min-max)</label>
         <div style="display:flex;gap:8px">
           <input type="number" id="binMin" value="2000" min="0" step="100" />
-          <input type="number" id="binMax" value="20000" min="0" step="100" />
+          <input type="number" id="binMax" value="50000" min="0" step="100" />
         </div>
       </div>
       <div class="card">
@@ -107,41 +107,28 @@ function chemFor(pos){
 }
 function roundTo(v,step){ return Math.round(v/step)*step; }
 async function api(path){ const r=await fetch(path,{cache:'no-store'}); const t=await r.text(); try{ return JSON.parse(t);}catch{return{raw:t}}; }
+function normName(s){ return (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim(); }
 
 async function testAPI(){
   try{
     setStatus('Teste API…');
     const futdb=await api('/api/futdb?type=test');
-    const pop=await api('/api/popular-scrape?limit=10');
-    const price=await api('/api/price-scrape?name=Kylian%20Mbappe&platform=ps');
-    alert('FUTDB: '+JSON.stringify(futdb)+'\nPOPULAR: '+JSON.stringify(pop)+'\nSCRAPER: '+JSON.stringify(price));
+    const pop=await api('/api/popular-scrape?limit=20');
+    const price=await api('/api/price-scrape?name=Heung Min Son&platform=ps');
+    alert('FUTDB: '+JSON.stringify(futdb)+'\nPOPULAR: '+(pop.items?.length||0)+' items\nSCRAPER: '+JSON.stringify(price));
     setStatus('API-Test abgeschlossen.', true);
   }catch(e){ alert('API-Fehler: '+e.message); setStatus('API-Fehler: '+e.message,false); }
 }
 
-// Kandidaten via FUTDB (mehrere Seiten)
-async function fetchPlayersPaged(targetCount){
-  const batch=[]; let page=1; const limit=200; const maxPages=5;
-  while(batch.length < targetCount*3 && page<=maxPages){
+async function fetchPlayersPaged(pages, limit=200){
+  const out=[]; for(let page=1; page<=pages; page++){
     const j=await api(`/api/futdb?type=players&page=${page}&limit=${limit}`);
     const arr=(j&&(j.items||j.data))?(j.items||j.data):[];
-    batch.push(...arr);
+    out.push(...arr);
     if(arr.length<limit) break;
-    page++;
   }
-  return batch;
+  return out;
 }
-
-// FODDER-Heuristik: hohe OVR, nicht „Meta“-Flügel/Striker
-function isFodder(p, oMin, oMax){
-  const o=+(p.rating||p.ovr||0);
-  const pos=(p.position||'').toUpperCase();
-  const notMeta = /GK|CB|LB|RB|LWB|RWB|CDM|CM/.test(pos); // „langsame“/SBC-geeignete Positionen
-  return o>=Math.max(82,oMin) && o<=Math.max(oMin,oMax) && notMeta;
-}
-
-// META/Popular Positionen (für „popular/played“ Fallbacks)
-function goodMetaPos(pos){ return /ST|CF|LW|RW|LM|RM|CAM|CM|CB|LB|RB/.test((pos||'').toUpperCase()); }
 
 async function createList(){
   const mode = document.getElementById('mode').value;
@@ -162,74 +149,90 @@ async function createList(){
     let candidates = [];
 
     if (mode === 'popular' || mode === 'played'){
-      // Scrape beliebte/oft gespielte Spieler
-      const pop = await api('/api/popular-scrape?limit='+(size*2));
-      candidates = (pop && pop.items) ? pop.items.map(x=>({ name:x.name, position:x.pos||'', rating:x.ovr })) : [];
-      if (!candidates.length){
-        // Fallback über FUTDB: grobe Meta-Filter
-        const pool = await fetchPlayersPaged(size);
-        candidates = pool.filter(p=>{
-          const o=+(p.rating||0);
-          return o>=Math.max(78,ovrMin) && o<=Math.min(88,ovrMax) && goodMetaPos(p.position);
-        }).slice(0, size*2);
+      // 1) Namen von FUT.GG
+      const pop = await api('/api/popular-scrape?limit='+(size*3));
+      const names = (pop && pop.items) ? pop.items.map(x=>x.name).filter(Boolean) : [];
+      if (!names.length){ setStatus('Popular-Liste leer.', false); tbody.innerHTML='<tr><td colspan="8">Keine Popular-Daten.</td></tr>'; return; }
+
+      // 2) Mehrere FUTDB-Seiten laden und per Name mappen => echte OVR/Pos
+      const pool = await fetchPlayersPaged(5); // bis zu 1000 Spieler
+      const byName = new Map();
+      for (const p of pool) byName.set(normName(p.name), p);
+
+      for (const n of names){
+        const p = byName.get(normName(n));
+        if (p) candidates.push(p);
       }
+      // zur Not: nicht gemappte Namen weglassen (wir brauchen echte OVR/Pos)
+      if (!candidates.length){ candidates = pool.slice(0, size*2); }
     } else {
-      // FODDER
-      const pool = await fetchPlayersPaged(size);
-      candidates = pool.filter(p=> isFodder(p, ovrMin, ovrMax) ).slice(0, size*3);
-      if(!candidates.length) candidates = pool.slice(0, size*3);
+      // FODDER: viele FUTDB-Spieler laden, dann SBC-taugliche Positionen + hohe OVR
+      const pool = await fetchPlayersPaged(5);
+      candidates = pool.filter(p=>{
+        const o=+(p.rating||0); const pos=(p.position||'').toUpperCase();
+        const fodderPos = /GK|CB|LB|RB|LWB|RWB|CDM|CM/.test(pos);
+        return o>=Math.max(82,ovrMin) && o<=Math.max(ovrMin,ovrMax) && fodderPos;
+      }).slice(0, size*3);
+      if (!candidates.length) candidates = pool.slice(0, size*3);
     }
 
-    if(!candidates.length){ setStatus('Keine Kandidaten gefunden.', false); tbody.innerHTML='<tr><td colspan="8">Keine Kandidaten.</td></tr>'; return; }
+    // Jetzt strenger OVR-Filter (deine Eingabe)
+    candidates = candidates.filter(p=>{
+      const o=+(p.rating||0); return o>=ovrMin && o<=ovrMax;
+    });
 
-    const rows=[];
+    if(!candidates.length){ setStatus('Keine passenden Kandidaten nach OVR-Filter.', false); tbody.innerHTML='<tr><td colspan="8">Kandidaten leer.</td></tr>'; return; }
 
-    for (const p of candidates){
-      if (rows.length >= size) break;
+    const rows = [];
+    // profit-Schwellen dynamisch: 800 -> 700 -> 600, um Liste voll zu bekommen
+    const wanted = size;
+    const profitSteps = [800, 700, 600];
 
-      const name = p.name || p.fullName || p.commonName || '-';
-      const pos  = p.position || '';
-      const ovr  = +(p.rating||p.ovr||0) || '';
+    for (const minProfit of profitSteps){
+      rows.length = 0;
 
-      // Preis: 1) FUTDB (falls Plan) 2) Scraper
-      let bin = null;
-      try {
-        if (p.id) {
-          const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id)}&platform=${plat}`);
-          if (pj && (pj.lowestBin||pj.bin||pj.price)) bin = pj.lowestBin||pj.bin||pj.price;
-        }
-      }catch{}
+      for (const p of candidates){
+        if (rows.length >= wanted) break;
 
-      if (bin===null){
+        const name = p.name || '-';
+        const pos  = p.position || '';
+        const ovr  = +(p.rating||0) || '';
+
+        // 1) Preis FUTDB -> 2) Scraper
+        let bin = null;
         try{
-          const sj = await api(`/api/price-scrape?name=${encodeURIComponent(name)}&platform=${plat}`);
-          if (sj && sj.bin) bin = sj.bin;
+          if (p.id){
+            const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id)}&platform=${plat}`);
+            if (pj && (pj.lowestBin||pj.bin||pj.price)) bin = pj.lowestBin||pj.bin||pj.price;
+          }
         }catch{}
+
+        if (bin===null){
+          try{
+            const sj = await api(`/api/price-scrape?name=${encodeURIComponent(name)}&platform=${plat}`);
+            if (sj && sj.bin) bin = sj.bin;
+          }catch{}
+        }
+
+        if (bin==null || !isFinite(bin) || bin<=0) continue;
+        if (bin < binMin || bin > binMax) continue;
+        if (bin > budget) continue;
+
+        const buy = roundTo(bin*(1 - discount/100), 100);
+        const sell = roundTo((buy + 1000) / 0.95, 100); // ~1k Zielprofit nach Tax
+        const profit = Math.floor(sell*0.95 - buy);
+        if (profit < minProfit) continue;
+
+        rows.push({ name, pos, ovr, bin, chem:chemFor(pos), buy, sell, profit });
       }
-
-      if (bin==null || !isFinite(bin) || bin<=0) continue;
-      if (bin < binMin || bin > binMax) continue;
-      if (bin > budget) continue;
-
-      const buy = roundTo(bin*(1 - discount/100), 100);
-      const targetProfit = 1000; // ~1k nach Tax
-      const sell = roundTo((buy + targetProfit) / 0.95, 100);
-      const profit = Math.floor(sell*0.95 - buy);
-      if (profit < 800) continue;
-
-      // Fodder: leicht bevorzugen, wenn Name/Pos darauf hindeuten
-      rows.push({
-        name, pos, ovr: (ovr || ''), bin, chem: chemFor(pos),
-        buy, sell, profit
-      });
+      if (rows.length >= Math.min(wanted, 5)) break; // ausreichend Treffer
     }
 
     rows.sort((a,b)=> b.profit - a.profit);
 
-    const tbodyEl = tbody;
-    tbodyEl.innerHTML='';
+    tbody.innerHTML='';
     if(!rows.length){
-      tbodyEl.innerHTML = '<tr><td colspan="8">Keine Deals im gesetzten Rahmen. Tipp: BIN-Bereich etwas weiten oder Abschlag ↘︎.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">Keine Deals im gesetzten Rahmen. Tipp: BIN-Bereich erweitern oder OVR leicht öffnen.</td></tr>';
       setStatus('Keine Deals gefunden.', false);
       return;
     }
@@ -245,7 +248,7 @@ async function createList(){
         <td>${r.buy.toLocaleString('de-DE')}</td>
         <td>${r.sell.toLocaleString('de-DE')}</td>
         <td>+${r.profit.toLocaleString('de-DE')}</td>`;
-      tbodyEl.appendChild(tr);
+      tbody.appendChild(tr);
     }
     setStatus('Fertig.', true);
   }catch(e){
