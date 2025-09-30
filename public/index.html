@@ -2,92 +2,188 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>ÜV-Listen-Generator (Live via FUTDATABASE + Scraper)</title>
+  <title>ÜV-Listen-Generator (FUTDATABASE + Scraper)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { background: #111; color: #fff; font-family: Arial, sans-serif; }
-    .box { margin: 10px; padding: 10px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { padding: 8px; border-bottom: 1px solid #444; text-align: left; }
-    th { background: #222; }
-    button { background: orange; border: none; padding: 8px 12px; cursor: pointer; }
+    :root{--bg:#0f0f10;--panel:#161617;--ink:#f3f3f3;--muted:#9aa1a9;--line:#222;--accent:#f5a524;--good:#34d399;--bad:#ef4444}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,Roboto,Inter,Arial}
+    .box{max-width:1100px;margin:0 auto;padding:18px}
+    h2{margin:0 0 6px 0}
+    .sub{color:var(--muted);margin-bottom:10px}
+    .row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:12px 0}
+    @media (max-width:900px){.row{grid-template-columns:1fr 1fr}}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input,select{width:100%;background:#1b1c1f;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px}
+    .btn{border:1px solid #3a3a3a;background:#1f1f20;color:#fff;border-radius:12px;padding:10px 14px;cursor:pointer}
+    .btn.primary{background:var(--accent);color:#111;border-color:#b77d10;font-weight:700}
+    table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+    th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left}
+    thead th{background:#121314;color:#c8cbd0}
+    .status{margin:6px 0 10px 0;color:var(--muted)}
+    .ok{color:var(--good)} .err{color:var(--bad)}
   </style>
 </head>
 <body>
-  <h2>ÜV-Listen-Generator (Live via FUTDATABASE)</h2>
-  <p>EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800, Rundung 100 • Buy = BIN – Abschlag %</p>
-
   <div class="box">
-    Plattform: 
-    <select id="platform">
-      <option value="ps">Playstation</option>
-      <option value="xbox">Xbox</option>
-      <option value="pc">PC</option>
-    </select>
-    Budget (Coins): <input type="number" id="budget" value="100000" />
-    Listengröße: <input type="number" id="limit" value="10" />
-    Marktpreis-Abschlag (%): <input type="number" id="discount" value="3" />
-    <button onclick="generate()">Erstellen</button>
-    <button onclick="testApi()">API testen</button>
+    <h2>ÜV-Listen-Generator (Live via FUTDATABASE + FUT.GG Scraper)</h2>
+    <div class="sub">EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800, Rundung 100 • Buy = BIN – Abschlag %</div>
+
+    <div id="status" class="status">Bereit.</div>
+
+    <div class="row">
+      <div class="card">
+        <label>Plattform</label>
+        <select id="platform">
+          <option value="ps">Playstation</option>
+          <option value="xbox">Xbox</option>
+          <option value="pc">PC</option>
+        </select>
+      </div>
+      <div class="card">
+        <label>Budget (Coins)</label>
+        <input type="number" id="budget" value="100000" min="1000" step="1000" />
+      </div>
+      <div class="card">
+        <label>Listengröße</label>
+        <input type="number" id="size" value="100" min="1" max="300" />
+      </div>
+      <div class="card">
+        <label>Marktpreis-Abschlag (%)</label>
+        <input type="number" id="discount" value="3" min="0" max="30" step="0.5" />
+      </div>
+      <div class="card" style="display:flex;align-items:end;gap:8px">
+        <button class="btn primary" id="btnMake" style="flex:1">Erstellen</button>
+        <button class="btn" id="btnTest">API testen</button>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Spieler</th><th>Pos</th><th>OVR</th><th>BIN</th>
+          <th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="8" style="color:#9aa1a9">Noch keine Liste.</td></tr>
+      </tbody>
+    </table>
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Spieler</th><th>Pos</th><th>OVR</th><th>BIN</th>
-        <th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th>
-      </tr>
-    </thead>
-    <tbody id="list"></tbody>
-  </table>
+<script>
+const statusEl = document.getElementById('status');
+function setStatus(msg, ok=null){ statusEl.textContent = msg; statusEl.className = 'status' + (ok===true?' ok':(ok===false?' err':'')); }
+function chemFor(pos){
+  const p=(pos||'').toUpperCase();
+  const atk=/ST|CF|LW|RW|LM|RM|CAM|CM|RF|LF/.test(p), def=/CB|LB|RB|LWB|RWB|CDM|GK/.test(p);
+  if(atk) return 'Hunter / Engine / Finisher';
+  if(def) return (p==='CB'||p==='CDM') ? 'Shadow / Anchor' : 'Shadow';
+  return 'Basic / Engine';
+}
+function roundTo(v,step){ return Math.round(v/step)*step; }
+async function api(path){
+  const r = await fetch(path,{cache:'no-store'});
+  const t = await r.text(); try { return JSON.parse(t); } catch { return {raw:t}; }
+}
 
-  <script>
-    const API_BASE = "https://api.futdatabase.com/api";
-    const SCRAPER = "/api/price-scrape"; // dein Vercel-Endpunkt
+// robuste Tests
+async function testAPI(){
+  try{
+    setStatus('Teste API…');
+    const futdb = await api('/api/futdb?type=test');
+    const scrape = await api('/api/price-scrape?name=Kylian%20Mbappe&platform=ps');
+    alert('FUTDATABASE: ' + JSON.stringify(futdb) + '\nSCRAPER: ' + JSON.stringify(scrape));
+    setStatus('API-Test abgeschlossen.', true);
+  }catch(e){
+    alert('API-Fehler: ' + e.message);
+    setStatus('API-Fehler: ' + e.message, false);
+  }
+}
 
-    async function testApi() {
-      const futdb = { ok: !!API_BASE, base: API_BASE };
-      const scrape = await fetch(`${SCRAPER}?name=Messi&platform=ps`).then(r=>r.json()).catch(()=>({bin:null}));
-      alert("FUTDATABASE: " + JSON.stringify(futdb) + "\nSCRAPER: " + JSON.stringify(scrape));
-    }
+// Kandidaten aus FUTDATABASE wählen (Meta-ish)
+function looksMeta(p){
+  const o = +(p.rating||p.ovr||0);
+  const pos = (p.position||'').toUpperCase();
+  const okPos = /ST|CF|LW|RW|LM|RM|CAM|CM|CDM|CB|LB|RB|GK/.test(pos);
+  return o>=80 && o<=84 && okPos;
+}
 
-    async function generate() {
-      const plat = document.getElementById("platform").value;
-      const budget = +document.getElementById("budget").value;
-      const limit = +document.getElementById("limit").value;
-      const discount = +document.getElementById("discount").value;
+async function createList(){
+  const plat = document.getElementById('platform').value;
+  const budget = +document.getElementById('budget').value||0;
+  const size = +document.getElementById('size').value||0;
+  const discount = +document.getElementById('discount').value||0;
+  const tbody = document.getElementById('tbody');
 
-      const list = document.getElementById("list");
-      list.innerHTML = "<tr><td colspan=8>Erzeuge Liste...</td></tr>";
+  tbody.innerHTML = '<tr><td colspan="8">Erzeuge Liste…</td></tr>';
+  setStatus('Lade Spieler (Proxy)…');
 
-      // 1) Spieler aus FUTDATABASE ziehen
-      const res = await fetch(`${API_BASE}/players?limit=${limit}`);
-      const data = await res.json();
+  try{
+    // *** WICHTIG: Spieler via Proxy holen (kein direkter FUTDATABASE-Call) ***
+    const j = await api('/api/futdb?type=players');
+    const arrAll = (j && (j.items||j.data)) ? (j.items||j.data) : [];
+    const arr = arrAll.filter(looksMeta).slice(0, size*2 || 100); // etwas mehr laden, dann filtern
 
-      list.innerHTML = "";
+    if(!arr.length){ setStatus('Keine passenden Spieler gefunden.'); return; }
 
-      for (const p of data.items || []) {
-        // 2) Live BIN via Scraper
-        const s = await fetch(`${SCRAPER}?name=${encodeURIComponent(p.name)}&platform=${plat}`).then(r=>r.json()).catch(()=>({bin:null}));
-        const bin = s.bin || null;
+    tbody.innerHTML=''; let used=0;
 
-        let buy = bin ? Math.floor(bin * (1 - discount / 100)) : null;
-        let sell = bin || null;
-        let profit = (sell && buy) ? Math.floor((sell * 0.95) - buy) : null;
+    for (const p of arr){
+      if (used >= size) break;
 
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${p.name}</td>
-          <td>${p.position}</td>
-          <td>${p.rating}</td>
-          <td>${bin ? bin.toLocaleString() : "-"}</td>
-          <td>${p.position === "ST" ? "Hunter / Engine / Finisher" : "Shadow / Anchor"}</td>
-          <td>${buy ? buy.toLocaleString() : "-"}</td>
-          <td>${sell ? sell.toLocaleString() : "-"}</td>
-          <td>${profit ? profit.toLocaleString() : "-"}</td>
-        `;
-        list.appendChild(tr);
+      // 1) optionaler Preis via FUTDATABASE (falls Plan erlaubt)
+      let bin = null;
+      try {
+        const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id||p.playerId)}&platform=${plat}`);
+        if (pj && (pj.lowestBin||pj.bin||pj.price)) bin = pj.lowestBin||pj.bin||pj.price;
+      } catch {}
+
+      // 2) Fallback: Scraper FUT.GG (Proxy-Route)
+      if (bin===null){
+        try{
+          const sj = await api(`/api/price-scrape?name=${encodeURIComponent(p.name||'')}&platform=${plat}`);
+          if (sj && sj.bin) bin = sj.bin;
+        }catch{}
       }
+
+      const hasPrice = bin!==null && isFinite(bin) && bin>0;
+      let buy='—', sell='—', profit='—';
+      if (hasPrice){
+        buy = roundTo(bin*(1 - discount/100), 100);
+        const targetProfit = 1000; // ~1k nach Tax
+        sell = roundTo((buy + targetProfit) / 0.95, 100);
+        profit = Math.floor(sell*0.95 - buy);
+        if (bin>budget || profit<800) continue;
+      }
+
+      const tr=document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.name||'-'}</td>
+        <td>${p.position||'-'}</td>
+        <td>${p.rating||p.ovr||'-'}</td>
+        <td>${hasPrice ? bin.toLocaleString('de-DE') : '—'}</td>
+        <td>${chemFor(p.position)}</td>
+        <td>${hasPrice ? Number(buy).toLocaleString('de-DE') : '—'}</td>
+        <td>${hasPrice ? Number(sell).toLocaleString('de-DE') : '—'}</td>
+        <td>${hasPrice ? ('+'+Number(profit).toLocaleString('de-DE')) : '—'}</td>`;
+      tbody.appendChild(tr);
+      used++;
     }
-  </script>
+
+    if(!tbody.children.length){
+      tbody.innerHTML = '<tr><td colspan="8">Keine Ergebnisse (Preisquelle liefert nichts oder Filter zu streng).</td></tr>';
+    }
+    setStatus('Fertig.', true);
+  }catch(e){
+    setStatus('Fehler: '+e.message, false);
+    tbody.innerHTML = '<tr><td colspan="8">Fehler beim Erstellen.</td></tr>';
+  }
+}
+
+document.getElementById('btnTest').addEventListener('click', testAPI);
+document.getElementById('btnMake').addEventListener('click', createList);
+</script>
 </body>
 </html>
