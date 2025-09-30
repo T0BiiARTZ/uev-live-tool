@@ -1,205 +1,160 @@
-// pages/api/uv-list.js
-// HTML-only FUT.GG Scraper (+ Fallback auf thecoinprinter trading-list)
-// Endung: .js
+// /pages/api/uv-list.js
+// Scraper-only Variante: FUT.GG (Trending + Player) und FUTBIN (Popular + Player)
+// Keine externen Abhängigkeiten. Nur fetch + Regex.
+// Plattformen: ps | xbox | pc
+// Test-Endpoint: /api/uv-list?mode=status
 
 const UA =
+  process.env.FUT_SCRAPER_UA ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const fmtInt = (s) => parseInt(String(s ?? "").replace(/[^\d]/g, ""), 10) || 0;
+const fmtInt = (s) => {
+  const n = parseInt(String(s).replace(/[^\d]/g, ""), 10);
+  return Number.isFinite(n) ? n : null;
+};
 const roundTo = (v, step) => Math.round(v / step) * step;
 
-async function gentleFetch(url, extraHeaders = {}) {
-  await sleep(120 + Math.floor(Math.random() * 160));
+// kleine Drosselung + UA
+async function gentleFetch(url) {
+  await sleep(80 + Math.floor(Math.random() * 120));
   const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "User-Agent": UA,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache",
-      ...extraHeaders,
-    },
-    redirect: "follow",
-    cache: "no-store",
+    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}`);
   return res.text();
 }
 
-/* ---------- FUT.GG (HTML-only) ---------- */
+/* ------------------------------------------------
+   1) Kandidaten-Quellen
+--------------------------------------------------*/
 
-async function getPopularFutgg(limit = 60) {
+// FUT.GG Trending -> [{id, name}]
+async function getFutggTrending(limit = 80) {
+  const html = await gentleFetch("https://www.fut.gg/players/trending/");
   const out = [];
-  let page = 1;
-  while (out.length < limit && page <= 3) {
-    const html = await gentleFetch(
-      `https://www.fut.gg/players/?sort=popular&page=${page}`
-    );
-
-    // Spieler-Links /players/12345-... , Name aus title/alt/innerText
-    const re = /<a[^>]+href="\/players\/(\d+)-[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
-    let m;
-    while ((m = re.exec(html)) && out.length < limit) {
-      const id = parseInt(m[1], 10);
-      let name =
-        m[2].match(/title="([^"]+)"/)?.[1] ||
-        m[2].match(/alt="([^"]+)"/)?.[1] ||
-        m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-      if (id && name) out.push({ id, name });
-    }
-
-    // Fallback: eingebettetes JSON (falls vorhanden)
-    if (out.length < 10) {
-      const nuxt =
-        html.match(/__NUXT__\s*=\s*(\{[\s\S]+?\});/) ||
-        html.match(/__NEXT_DATA__\s*=\s*(\{[\s\S]+?\});/);
-      if (nuxt) {
-        try {
-          const data = JSON.parse(nuxt[1]);
-          const s = JSON.stringify(data);
-          const r2 =
-            /"id"\s*:\s*(\d+)[\s\S]{0,120}?"name"\s*:\s*"([^"]+)"/g;
-          let n;
-          while ((n = r2.exec(s)) && out.length < limit) {
-            const id = parseInt(n[1], 10);
-            const name = n[2];
-            if (id && name && !out.find((x) => x.id === id))
-              out.push({ id, name });
-          }
-        } catch {}
-      }
-    }
-
-    page++;
+  // Links wie /players/12345-... + Name im Inneren
+  const re = /<a[^>]+href="\/players\/(\d+)-[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) && out.length < limit) {
+    const id = parseInt(m[1], 10);
+    let name =
+      (m[2].match(/title="([^"]+)"/) || [])[1] ||
+      (m[2].match(/alt="([^"]+)"/) || [])[1] ||
+      m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (id && name) out.push({ id, name, src: "FUT.GG" });
   }
-  return out.slice(0, limit);
+  return out;
 }
 
-async function getFutggBin(id, platform = "ps") {
-  const html = await gentleFetch(`https://www.fut.gg/players/${id}/`);
+// FUTBIN Popular -> [{id, name}]
+async function getFutbinPopular(limit = 80) {
+  const html = await gentleFetch("https://www.futbin.com/popular");
+  const out = [];
+  // FUTBIN Links sind oft /26/player/230566/... -> nimm die /player/{id}
+  const re = /href="\/(?:\d+\/)?player\/(\d+)[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) && out.length < limit) {
+    const id = parseInt(m[1], 10);
+    let name = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (id && name) out.push({ id, name, src: "FUTBIN" });
+  }
+  return out;
+}
 
-  // 1) Objekt lowestBin: {"ps":12345,"xbox":...}
-  const objMatch = html.match(/"lowestBin"\s*:\s*\{([^}]+)\}/i);
-  if (objMatch) {
+/* ------------------------------------------------
+   2) Detailseiten -> Lowest BIN
+--------------------------------------------------*/
+
+// FUT.GG Playerseite: versucht mehrere Varianten (lowestBin-JSON, einfacher Wert, Text)
+function parseFutggLowestBin(html, platform = "ps") {
+  // 1) JSON-Objekt: "lowestBin": { ps: N, xbox: N, pc: N }
+  const m1 = html.match(/"lowestBin"\s*:\s*\{([^}]+)\}/i);
+  if (m1) {
     try {
-      const normalized = ("{" + objMatch[1] + "}").replace(
-        /([a-zA-Z]+)\s*:/g,
-        '"$1":'
-      );
-      const o = JSON.parse(normalized);
-      const map = {
-        ps: ["ps", "playstation"],
-        xbox: ["xbox", "xb"],
-        pc: ["pc", "computer"],
-      };
-      for (const k of map[platform] || [platform]) {
+      const norm = "{" + m1[1].replace(/([a-zA-Z]+)\s*:/g, '"$1":') + "}";
+      const o = JSON.parse(norm);
+      const keyMap = { ps: ["ps", "playstation"], xbox: ["xbox", "xb"], pc: ["pc", "computer"] };
+      for (const k of keyMap[platform] || [platform]) {
         if (o[k] != null) {
           const num = fmtInt(o[k]);
-          if (num > 0) return num;
+          if (num) return num;
         }
       }
-      // irgendein Wert
+      // sonst irgendein Wert
       for (const k of Object.keys(o)) {
         const num = fmtInt(o[k]);
-        if (num > 0) return num;
+        if (num) return num;
       }
     } catch {}
   }
-
-  // 2) "lowestBin": 6100
-  const simple = html.match(/"lowestBin"\s*:\s*([0-9]+)/i);
-  if (simple) {
-    const num = parseInt(simple[1], 10);
-    if (num > 0) return num;
+  // 2) Einfach: "lowestBin": 6100
+  const m2 = html.match(/"lowestBin"\s*:\s*([0-9]+)/i);
+  if (m2) {
+    const n = parseInt(m2[1], 10);
+    if (n > 0) return n;
   }
-
-  // 3) Text "LOWEST BIN ... 12,500"
-  const text = html.match(/LOWEST\s*BIN[\s\S]{0,300}?([0-9][\d\., ]+)/i);
-  if (text) {
-    const num = fmtInt(text[1]);
-    if (num > 0) return num;
+  // 3) Text: "LOWEST BIN" in Nähe der Zahl
+  const m3 = html.match(/LOWEST\s*BIN[\s\S]{0,300}?([0-9][\d\., ]+)/i);
+  if (m3) {
+    const n = fmtInt(m3[1]);
+    if (n) return n;
   }
   return null;
 }
 
-/* ---------- thecoinprinter Fallback ---------- */
-
-async function getFromCoinPrinter(platform = "ps", maxItems = 60) {
-  // deren öffentlich sichtbare API; kann rate-limit sein
-  const url = "https://futp-api-vhnwl.ondigitalocean.app/api/v1/players/trading-list";
-  const txt = await gentleFetch(url, {
-    Accept: "application/json, text/plain, */*",
-  });
-
-  let data;
-  try {
-    data = JSON.parse(txt);
-  } catch {
-    return [];
-  }
-
-  // Versuche generisch zu mappen
-  const arr = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
-  const out = [];
-
-  for (const it of arr) {
-    const name =
-      it.name ||
-      it.player_name ||
-      it.fullName ||
-      it.card_name ||
-      it.title ||
-      "";
-    if (!name) continue;
-
-    // Preisfelder erraten
-    const priceCandidates = [
-      it.bin,
-      it.lowestBin,
-      it.price,
-      it.prices?.[platform],
-      it.prices?.ps,
-      it.ps,
-      it.playstation,
-      it.xbox,
-      it.pc,
-    ];
-    let bin = 0;
-    for (const p of priceCandidates) {
-      const v = fmtInt(p);
-      if (v > 0) {
-        bin = v;
-        break;
-      }
-    }
-    if (bin <= 0) continue;
-
-    out.push({
-      name,
-      pos: it.pos || it.position || "",
-      ovr: it.ovr || it.overall || "",
-      bin,
-      src: "COINPRINTER",
-      chem: "",
-    });
-
-    if (out.length >= maxItems) break;
-  }
-
-  return out;
+async function getFutggPlayerBin(id, platform = "ps") {
+  const html = await gentleFetch(`https://www.fut.gg/players/${id}/`);
+  return parseFutggLowestBin(html, platform);
 }
 
-/* ---------- Helpers ---------- */
+// FUTBIN Playerseite: heuristisch nach „LC Price“ / „Lowest BIN“ / JSON
+function parseFutbinLowestBin(html, platform = "ps") {
+  // 1) Diverse "LC Price" / "LOWEST BIN" Texte
+  //    Wir nehmen die zuerst vorkommende Zahl in den nächsten ~300 Zeichen
+  const platMap = { ps: "PlayStation", xbox: "Xbox", pc: "PC" };
+  const pName = platMap[platform] || "PlayStation";
 
-function guessOVR(name) {
-  const m = String(name).match(/(?:^|\s)(\d{2})(?:\s|$)/);
-  return m ? parseInt(m[1], 10) : null;
+  // platform-spezifische Boxen enthalten häufig den Namen der Plattform drumherum
+  const near = new RegExp(
+    `${pName}[\\s\\S]{0,400}?(?:LC\\s*Price|LOWEST\\s*BIN|Lowest\\s*BIN|BIN|Price)[^0-9]{0,40}([0-9][\\d\\., ]+)`,
+    "i"
+  );
+  const mNear = html.match(near);
+  if (mNear) {
+    const n = fmtInt(mNear[1]);
+    if (n) return n;
+  }
+
+  // 2) Generisch: „LC Price“ irgendwo
+  const mLC = html.match(/LC\s*Price[^0-9]{0,40}([0-9][\d\., ]+)/i);
+  if (mLC) {
+    const n = fmtInt(mLC[1]);
+    if (n) return n;
+  }
+
+  // 3) Seltener: inline JSON-Schnipsel mit „lowest“ / „LCPrice“
+  const mJSON = html.match(/"LCPrice"\s*:\s*([0-9]+)/i) || html.match(/"lowest"\s*:\s*([0-9]+)/i);
+  if (mJSON) {
+    const n = parseInt(mJSON[1], 10);
+    if (n > 0) return n;
+  }
+
+  return null;
 }
 
-function guessChem(pos) {
-  const p = String(pos || "").toUpperCase();
+async function getFutbinPlayerBin(id, platform = "ps") {
+  // FUTBIN v26 Spielzeitraum
+  const html = await gentleFetch(`https://www.futbin.com/26/player/${id}`);
+  return parseFutbinLowestBin(html, platform);
+}
+
+/* ------------------------------------------------
+   3) Hilfsfunktionen (Chemstyle, OVR aus Name)
+--------------------------------------------------*/
+
+function chemFor(pos) {
+  const p = (pos || "").toUpperCase();
   const atk = /ST|CF|LW|RW|LM|RM|CAM|CM|RF|LF/.test(p);
   const def = /CB|LB|RB|LWB|RWB|CDM/.test(p);
   if (atk) return "Hunter / Engine / Finisher";
@@ -207,14 +162,15 @@ function guessChem(pos) {
   return p === "GK" ? "Basic" : "Basic / Engine";
 }
 
-function computeDeal(bin, discountPct) {
-  const buy = roundTo(bin * (1 - discountPct / 100), 100);
-  const sell = roundTo((buy + 1000) / 0.95, 100);
-  const profit = Math.floor(sell * 0.95 - buy);
-  return { buy, sell, profit };
+// Fallback-OVR aus Namen, falls FUT.GG/FUTBIN es nicht mitliefert
+function tryExtractOVR(name) {
+  const m = String(name).match(/(?:^|\s)(\d{2})(?:\s|$)/);
+  return m ? parseInt(m[1], 10) : null;
 }
 
-/* ---------- API Handler ---------- */
+/* ------------------------------------------------
+   4) Haupt-Handler
+--------------------------------------------------*/
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -222,99 +178,102 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  try {
-    const q = req.query || {};
-    const platform = (q.platform || "ps").toLowerCase(); // ps|xbox|pc
-    const size = Math.max(1, Math.min(120, parseInt(q.size || "50", 10)));
-    const ovrMin = parseInt(q.ovrMin || "78", 10);
-    const ovrMax = parseInt(q.ovrMax || "88", 10);
-    const binMin = parseInt(q.binMin || "1500", 10);
-    const binMax = parseInt(q.binMax || "60000", 10);
-    const discount = parseFloat(q.discount || "3");
+  const q = req.query || {};
+  const platform = String(q.platform || "ps").toLowerCase(); // ps|xbox|pc
+  const size = Math.max(1, Math.min(120, parseInt(q.size || "50", 10)));
+  const ovrMin = parseInt(q.ovrMin || "0", 10);
+  const ovrMax = parseInt(q.ovrMax || "99", 10);
+  const binMin = parseInt(q.binMin || "0", 10);
+  const binMax = parseInt(q.binMax || "9999999", 10);
+  const discount = parseFloat(q.discount || "3"); // Abschlag %
 
-    let items = [];
-    let source = "FUT.GG";
-
-    /* 1) FUT.GG direkt */
+  // API testen?
+  if (q.mode === "status") {
     try {
-      const candidates = await getPopularFutgg(size * 3);
-      for (const c of candidates) {
-        if (items.length >= size) break;
-        let bin = null;
-        try {
-          bin = await getFutggBin(c.id, platform);
-        } catch {}
-        if (!bin || bin < binMin || bin > binMax) continue;
-
-        const ovr = guessOVR(c.name);
-        if (ovr && (ovr < ovrMin || ovr > ovrMax)) continue;
-
-        const { buy, sell, profit } = computeDeal(bin, discount);
-        if (profit < 500) continue;
-
-        items.push({
-          name: c.name,
-          pos: "",
-          ovr: ovr || "",
-          bin,
-          src: "FUT.GG",
-          chem: guessChem(""),
-          buy,
-          sell,
-          profit,
-        });
-      }
+      const [gg, fb] = await Promise.allSettled([getFutggTrending(10), getFutbinPopular(10)]);
+      return res.status(200).json({
+        ok: true,
+        FUTGG: gg.status === "fulfilled" ? { ok: true, items: gg.value.length } : { ok: false, error: String(gg.reason) },
+        FUTBIN: fb.status === "fulfilled" ? { ok: true, items: fb.value.length } : { ok: false, error: String(fb.reason) },
+      });
     } catch (e) {
-      // still try fallback
+      return res.status(200).json({ ok: false, error: String(e).slice(0, 300) });
+    }
+  }
+
+  try {
+    // 1) Kandidaten holen (ein Mix aus beiden Quellen, doppelte rausfiltern)
+    const [gg, fb] = await Promise.allSettled([getFutggTrending(size), getFutbinPopular(size)]);
+    const bag = [];
+    const add = (it) => {
+      for (const x of it) if (x && x.id && !bag.find((y) => y.id === x.id)) bag.push(x);
+    };
+    if (gg.status === "fulfilled") add(gg.value);
+    if (fb.status === "fulfilled") add(fb.value);
+
+    if (!bag.length) {
+      return res
+        .status(200)
+        .json({ ok: false, error: "Trending/Popular leer (Scraper blockiert?)", items: [] });
     }
 
-    /* 2) Fallback thecoinprinter */
-    if (items.length === 0) {
-      const cp = await getFromCoinPrinter(platform, size * 2);
-      const collected = [];
-      for (const it of cp) {
-        if (it.bin < binMin || it.bin > binMax) continue;
+    const items = [];
+    let priceHits = 0;
 
-        const ovr =
-          it.ovr || it.overall || guessOVR(it.name) || "";
-        if (ovr && (parseInt(ovr, 10) < ovrMin || parseInt(ovr, 10) > ovrMax))
-          continue;
+    // 2) Je Kandidat Preis holen (erst FUTBIN, dann FUT.GG – oft liefert einer von beiden)
+    for (const cand of bag) {
+      if (items.length >= size) break;
 
-        const { buy, sell, profit } = computeDeal(it.bin, discount);
-        if (profit < 500) continue;
-
-        collected.push({
-          name: it.name,
-          pos: it.pos || "",
-          ovr,
-          bin: it.bin,
-          src: "COINPRINTER",
-          chem: guessChem(it.pos),
-          buy,
-          sell,
-          profit,
-        });
-
-        if (collected.length >= size) break;
+      let bin = null;
+      try {
+        if (cand.src === "FUTBIN") {
+          bin = await getFutbinPlayerBin(cand.id, platform);
+          if (!bin) bin = await getFutggPlayerBin(cand.id, platform);
+        } else {
+          bin = await getFutggPlayerBin(cand.id, platform);
+          if (!bin) bin = await getFutbinPlayerBin(cand.id, platform);
+        }
+      } catch {
+        bin = null;
       }
-      items = collected;
-      source = "COINPRINTER";
+
+      if (!bin || !Number.isFinite(bin) || bin <= 0) continue;
+      priceHits++;
+
+      if (bin < binMin || bin > binMax) continue;
+
+      // OVR nur „best effort“
+      const ovr = tryExtractOVR(cand.name);
+      if (ovr && (ovr < ovrMin || ovr > ovrMax)) continue;
+
+      const buy = roundTo(bin * (1 - discount / 100), 100);
+      const sell = roundTo((buy + 1000) / 0.95, 100);
+      const profit = Math.floor(sell * 0.95 - buy);
+      if (profit < 500) continue;
+
+      items.push({
+        name: cand.name,
+        pos: "",
+        ovr: ovr || "",
+        bin,
+        src: cand.src,
+        chem: chemFor(""),
+        buy,
+        sell,
+        profit,
+      });
     }
 
     items.sort((a, b) => b.profit - a.profit);
 
     return res.status(200).json({
       ok: true,
-      source,
       platform,
       size,
+      priceHits,
       items,
     });
   } catch (e) {
-    return res.status(200).json({
-      ok: false,
-      error: String(e?.message || e).slice(0, 300),
-      items: [],
-    });
+    return res.status(200).json({ ok: false, error: String(e).slice(0, 300), items: [] });
   }
 }
