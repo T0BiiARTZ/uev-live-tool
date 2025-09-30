@@ -8,27 +8,31 @@
     :root{--bg:#0f0f10;--panel:#161617;--ink:#f3f3f3;--muted:#9aa1a9;--line:#222;--accent:#f5a524;--good:#34d399;--bad:#ef4444}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,Roboto,Inter,Arial}
-    .box{max-width:1150px;margin:0 auto;padding:18px}
+    .box{max-width:1200px;margin:0 auto;padding:18px}
     h2{margin:0 0 6px 0}
     .sub{color:var(--muted);margin-bottom:12px}
-    .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+    .grid{display:grid;grid-template-columns: 1fr 1fr 1fr 1fr 1.2fr 1.6fr 1fr; gap:10px}
     @media (max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
     .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
     label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
     input,select{width:100%;background:#1b1c1f;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px}
+    /* Breitere Zahleneingaben */
+    .wide{min-width:160px}
+    .range{display:flex;gap:8px}
     .btn{border:1px solid #3a3a3a;background:#1f1f20;color:#fff;border-radius:12px;padding:10px 14px;cursor:pointer}
     .btn.primary{background:var(--accent);color:#111;border-color:#b77d10;font-weight:700}
     table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:12px}
-    th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left}
+    th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
     thead th{background:#121314;color:#c8cbd0}
     .status{margin:6px 0 10px 0;color:var(--muted)}
     .ok{color:var(--good)} .err{color:var(--bad)}
+    .note{color:var(--muted);font-size:13px;margin-top:6px}
   </style>
 </head>
 <body>
   <div class="box">
     <h2>ÜV-Listen-Generator (Live via FUTDATABASE + FUT.GG Scraper)</h2>
-    <div class="sub">EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800, Rundung 100 • Buy = BIN – Abschlag %</div>
+    <div class="sub">EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800 (fällt bei Bedarf bis 500), Rundung 100 • Buy = BIN – Abschlag %</div>
 
     <div id="status" class="status">Bereit.</div>
 
@@ -51,29 +55,29 @@
       </div>
       <div class="card">
         <label>Budget (Coins)</label>
-        <input type="number" id="budget" value="100000" min="1000" step="1000" />
+        <input type="number" id="budget" class="wide" value="100000" min="1000" step="1000" />
       </div>
       <div class="card">
         <label>Listengröße</label>
-        <input type="number" id="size" value="50" min="1" max="300" />
+        <input type="number" id="size" class="wide" value="50" min="1" max="300" />
       </div>
       <div class="card">
         <label>OVR (min-max)</label>
-        <div style="display:flex;gap:8px">
-          <input type="number" id="ovrMin" value="78" min="50" max="99" />
-          <input type="number" id="ovrMax" value="88" min="50" max="99" />
+        <div class="range">
+          <input type="number" id="ovrMin" class="wide" value="78" min="50" max="99" />
+          <input type="number" id="ovrMax" class="wide" value="88" min="50" max="99" />
         </div>
       </div>
       <div class="card">
         <label>BIN-Bereich (min-max)</label>
-        <div style="display:flex;gap:8px">
-          <input type="number" id="binMin" value="1500" min="0" step="100" />
-          <input type="number" id="binMax" value="60000" min="0" step="100" />
+        <div class="range">
+          <input type="number" id="binMin" class="wide" value="1500" min="0" step="100" />
+          <input type="number" id="binMax" class="wide" value="60000" min="0" step="100" />
         </div>
       </div>
       <div class="card">
         <label>Abschlag (%)</label>
-        <input type="number" id="discount" value="3" min="0" max="30" step="0.5" />
+        <input type="number" id="discount" class="wide" value="3" min="0" max="30" step="0.5" />
       </div>
     </div>
 
@@ -86,13 +90,14 @@
       <thead>
         <tr>
           <th>Spieler</th><th>Pos</th><th>OVR</th><th>BIN</th>
-          <th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th>
+          <th>Quelle</th><th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="8" style="color:#9aa1a9">Noch keine Liste.</td></tr>
+        <tr><td colspan="9" style="color:#9aa1a9">Noch keine Liste.</td></tr>
       </tbody>
     </table>
+    <div class="note">Hinweis: Wenn FUT.GG temporär blockt, kommen Preise primär über den Scraper verzögert/vereinzelt. Bei Bedarf 2–3× „Erstellen“ klicken.</div>
   </div>
 
 <script>
@@ -113,7 +118,7 @@ async function testAPI(){
   try{
     setStatus('Teste API…');
     const futdb=await api('/api/futdb?type=test');
-    const pop=await api('/api/popular-scrape?limit=30');
+    const pop=await api('/api/popular-scrape?limit=60');
     const price=await api('/api/price-scrape?name=Heung Min Son&platform=ps');
     alert('FUTDB: '+JSON.stringify(futdb)+'\nPOPULAR: '+(pop.items?.length||0)+' items\nSCRAPER: '+JSON.stringify(price));
     setStatus('API-Test abgeschlossen.', true);
@@ -130,6 +135,25 @@ async function fetchPlayersPaged(pages, limit=200){
   return out;
 }
 
+async function priceFor(name, futdbId, plat){
+  // 1) FUTDB (wenn ID vorhanden)
+  if (futdbId){
+    try{
+      const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(futdbId)}&platform=${plat}`);
+      if (pj && (pj.lowestBin||pj.bin||pj.price)) {
+        return { bin: (pj.lowestBin||pj.bin||pj.price), src: 'FUTDB' };
+      }
+    }catch{}
+  }
+  // 2) Scraper FUT.GG
+  try{
+    const sj = await api(`/api/price-scrape?name=${encodeURIComponent(name)}&platform=${plat}`);
+    if (sj && sj.bin) return { bin: sj.bin, src: 'SCRAPER' };
+  }catch{}
+  // 3) Kein Preis
+  return { bin:null, src:'—' };
+}
+
 async function createList(){
   const mode = document.getElementById('mode').value;
   const plat = document.getElementById('platform').value;
@@ -142,30 +166,30 @@ async function createList(){
   const discount = +document.getElementById('discount').value||0;
   const tbody = document.getElementById('tbody');
 
-  tbody.innerHTML = '<tr><td colspan="8">Erzeuge Liste…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9">Erzeuge Liste…</td></tr>';
   setStatus('Sammle Kandidaten…');
 
   try{
     let candidates = [];
 
     if (mode === 'popular' || mode === 'played'){
-      // 1) Namen von FUT.GG
-      const pop = await api('/api/popular-scrape?limit='+(size*3));
+      // Namen holen (viel mehr als benötigt, um Blocker/Fehler abzufangen)
+      const pop = await api('/api/popular-scrape?limit='+(size*5));
       const names = (pop && pop.items) ? pop.items.map(x=>x.name).filter(Boolean) : [];
+      if (!names.length){ setStatus('Popular-Daten leer (Scrape blockiert). Versuche erneut.', false); tbody.innerHTML='<tr><td colspan="9">Keine Popular-Daten (Scraper blockiert).</td></tr>'; return; }
 
-      // 2) FUTDB-Pool laden und Namen mappen (für echte OVR/Pos) – wenn möglich
-      const pool = await fetchPlayersPaged(8); // bis zu ~1600 Spieler
+      // FUTDB-Pool laden und Namen mappen (OVR/Pos wenn möglich)
+      const pool = await fetchPlayersPaged(10); // bis ~2000 Spieler
       const byName = new Map(); for (const p of pool) byName.set(normName(p.name), p);
 
-      // Kandidaten: gemappte FUTDB-Spieler ODER „Stub“ nur mit Name (OVR/Pos unbekannt)
       for (const n of names){
         const p = byName.get(normName(n));
-        if (p) { candidates.push(p); }
-        else   { candidates.push({ name:n, position:'', rating:null, id:null }); }
+        if (p) candidates.push(p);
+        else   candidates.push({ name:n, position:'', rating:null, id:null }); // Stub ohne OVR/Pos
       }
     } else {
-      // FODDER: FUTDB laden, SBC-taugliche Positionen + hohe OVR
-      const pool = await fetchPlayersPaged(8);
+      // FODDER
+      const pool = await fetchPlayersPaged(10);
       candidates = pool.filter(p=>{
         const o=+(p.rating||0); const pos=(p.position||'').toUpperCase();
         const fodderPos = /GK|CB|LB|RB|LWB|RWB|CDM|CM/.test(pos);
@@ -174,22 +198,24 @@ async function createList(){
       if (!candidates.length) candidates = pool.slice();
     }
 
-    // OVR-Filter nur anwenden, wenn eine OVR vorhanden ist (Popular/Played-Stubs behalten)
+    // OVR-Filter nur anwenden, wenn OVR existiert (Popular-Stubs behalten)
     candidates = candidates.filter(p=>{
       const o = +(p.rating ?? p.ovr ?? 0);
-      if (!o) return true; // keine OVR → nicht rausfiltern
+      if (!o) return true;
       return o>=ovrMin && o<=ovrMax;
     });
 
-    if(!candidates.length){ setStatus('Kandidaten leer (Filter zu streng).', false); tbody.innerHTML='<tr><td colspan="8">Kandidaten leer.</td></tr>'; return; }
+    if(!candidates.length){ setStatus('Kandidaten leer (Filter zu streng).', false); tbody.innerHTML='<tr><td colspan="9">Kandidaten leer.</td></tr>'; return; }
 
     const rows = [];
     const wanted = size;
-    const profitSteps = [800, 700, 600];
+    const profitSteps = [800, 700, 600, 500];
+    let priceHits = 0;
 
     for (const minProfit of profitSteps){
-      rows.length = 0;
+      rows.length = 0; priceHits = 0;
 
+      // viele Kandidaten probieren
       for (const p of candidates){
         if (rows.length >= wanted) break;
 
@@ -197,32 +223,20 @@ async function createList(){
         const pos  = p.position || '';
         const ovr  = +(p.rating||p.ovr||0) || '';
 
-        // Preis: 1) FUTDB (nur wenn ID vorhanden) → 2) Scraper
-        let bin = null;
-        try{
-          if (p.id){
-            const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id)}&platform=${plat}`);
-            if (pj && (pj.lowestBin||pj.bin||pj.price)) bin = pj.lowestBin||pj.bin||pj.price;
-          }
-        }catch{}
-
-        if (bin===null){
-          try{
-            const sj = await api(`/api/price-scrape?name=${encodeURIComponent(name)}&platform=${plat}`);
-            if (sj && sj.bin) bin = sj.bin;
-          }catch{}
-        }
+        const priced = await priceFor(name, p.id, plat);
+        const bin = priced.bin; const src = priced.src;
+        if (bin!=null && isFinite(bin) && bin>0) priceHits++;
 
         if (bin==null || !isFinite(bin) || bin<=0) continue;
         if (bin < binMin || bin > binMax) continue;
         if (bin > budget) continue;
 
         const buy = roundTo(bin*(1 - discount/100), 100);
-        const sell = roundTo((buy + 1000) / 0.95, 100); // ~1k Zielprofit nach Tax
+        const sell = roundTo((buy + 1000) / 0.95, 100);
         const profit = Math.floor(sell*0.95 - buy);
         if (profit < minProfit) continue;
 
-        rows.push({ name, pos, ovr, bin, chem:chemFor(pos), buy, sell, profit });
+        rows.push({ name, pos, ovr, bin, src, chem:chemFor(pos), buy, sell, profit });
       }
       if (rows.length >= Math.min(wanted, 5)) break;
     }
@@ -231,7 +245,8 @@ async function createList(){
 
     tbody.innerHTML='';
     if(!rows.length){
-      tbody.innerHTML = '<tr><td colspan="8">Keine Deals im gesetzten Rahmen. Tipp: BIN-Bereich deutlich verbreitern (z. B. 1.5k–60k) oder OVR öffnen.</td></tr>';
+      const msg = `Keine Deals im gesetzten Rahmen. Preis-Treffer: ${priceHits}. Tipp: BIN-Bereich erhöhen (z. B. 1.5k–60k), ggf. nochmal „Erstellen“ (Scraper kann blocken).`;
+      tbody.innerHTML = `<tr><td colspan="9">${msg}</td></tr>`;
       setStatus('Keine Deals gefunden.', false);
       return;
     }
@@ -243,6 +258,7 @@ async function createList(){
         <td>${r.pos||'—'}</td>
         <td>${r.ovr||'—'}</td>
         <td>${r.bin.toLocaleString('de-DE')}</td>
+        <td>${r.src}</td>
         <td>${r.chem}</td>
         <td>${r.buy.toLocaleString('de-DE')}</td>
         <td>${r.sell.toLocaleString('de-DE')}</td>
@@ -252,7 +268,7 @@ async function createList(){
     setStatus('Fertig.', true);
   }catch(e){
     setStatus('Fehler: '+e.message, false);
-    document.getElementById('tbody').innerHTML = '<tr><td colspan="8">Fehler beim Erstellen.</td></tr>';
+    document.getElementById('tbody').innerHTML = '<tr><td colspan="9">Fehler beim Erstellen.</td></tr>';
   }
 }
 
