@@ -1,11 +1,7 @@
 // api/uv-list.js
-//
-// Kombinierte Server-Route für deine ÜV-Liste.
-// - Kandidaten: FUTDATABASE (Players) oder FUT.GG Popular -> per FUTDB-Search gemappt
-// - Preise: zuerst FUTDATABASE, Fallback FUT.GG Scraper
-// - Ergebnis: JSON mit Spielername, OVR, Position, BIN, Kaufpreis, VK, Profit, Quelle
-//
-// Voraussetzung: In Vercel ist FUTDB_API_KEY gesetzt (PROJECT > Settings > Environment Variables)
+// Kombinierte Route: holt Kandidaten (Popular/Fodder), Preise zuerst via FUTDB,
+// Scraper (FUT.GG) nur als Fallback. Gibt fertige Deals als JSON zurück.
+// ENV: FUTDB_API_KEY muss gesetzt sein.
 
 const BASES = [
   'https://api.futdatabase.com/api',
@@ -19,7 +15,6 @@ function hdr(key, bearer=false){
 }
 
 async function fetchJsonAuth(url, key){
-  // erst X-AUTH, dann Bearer probieren
   let r = await fetch(url, { headers: hdr(key,false) });
   if (r.status === 401 || r.status === 403) {
     r = await fetch(url, { headers: hdr(key,true) });
@@ -44,7 +39,6 @@ async function futdbTry(paths, key){
 function arrFromPayload(j){
   return j?.items || j?.data || j?.players || j?.result || [];
 }
-
 function takePrice(j){
   return (
     j?.lowestBin ??
@@ -58,34 +52,27 @@ function takePrice(j){
 }
 
 const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
+const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
 
-/** ---------- FUT.GG SCRAPER ---------- **/
+/* ---------- FUT.GG (Fallback) ---------- */
 async function getFutggPopular(limit=40){
-  // Holt die Popular-Liste (erste Seite) und extrahiert Spielernamen
-  // (HTML kann variieren; wir fangen die üblichsten Varianten ab).
   const url = 'https://www.fut.gg/players/?sort=popular';
   const html = await fetch(url, { headers:{'User-Agent':'Mozilla/5.0'} }).then(r=>r.text());
   const names = new Set();
 
-  // Versuch 1: __NUXT__ / eingebettetes JSON
-  const nuxtMatch = html.match(/__NUXT__\s*=\s*(\{[\s\S]+?\});/);
-  if (nuxtMatch) {
+  const nuxt = html.match(/__NUXT__\s*=\s*(\{[\s\S]+?\});/);
+  if (nuxt) {
     try {
-      const nuxt = JSON.parse(nuxtMatch[1]);
-      const list = JSON.stringify(nuxt);
-      // sehr simple Extraktion der "name" Felder
+      const data = JSON.parse(nuxt[1]);
+      const str = JSON.stringify(data);
       const re = /"name"\s*:\s*"([^"]+)"/g;
-      let m; while((m=re.exec(list)) && names.size<limit){ names.add(m[1]); }
+      let m; while((m=re.exec(str)) && names.size<limit) names.add(m[1]);
     } catch {}
   }
-
-  // Versuch 2: data-player-name oder data-name-ähnliche Marker
   if (names.size < 10) {
     const re2 = /data-player-name="([^"]+)"/g;
-    let m; while((m=re2.exec(html)) && names.size<limit){ names.add(m[1]); }
+    let m; while((m=re2.exec(html)) && names.size<limit) names.add(m[1]);
   }
-
-  // Versuch 3: Linktitel
   if (names.size < 10) {
     const re3 = /<a[^>]+class="[^"]*player-card[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
     let m; while((m=re3.exec(html)) && names.size<limit){
@@ -94,42 +81,28 @@ async function getFutggPopular(limit=40){
       if (nm) names.add(nm);
     }
   }
-
   return Array.from(names).slice(0, limit);
 }
 
-function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim(); }
-
-/** ---------- PREIS VON FUT.GG (Fallback) ---------- **/
-async function getFutggBin(name, platform='ps'){
-  // Suche Seite und versuche "Lowest BIN" im Umfeld zu parsen
-  // (Not-Perfect, aber reicht als Fallback).
-  // Plattform wird bei FUT.GG nicht immer im HTML unterschieden;
-  // wir lassen sie hier nur formal durchlaufen.
+async function getFutggBin(name){
   const q = encodeURIComponent(name);
   const url = `https://www.fut.gg/players/?name=${q}`;
   const html = await fetch(url, { headers:{'User-Agent':'Mozilla/5.0'} }).then(r=>r.text());
-
-  // Suche "LOWEST BIN" -> Zahl im nahen Umfeld
   const lb = html.match(/LOWEST\s*BIN[\s\S]{0,300}?([0-9][\d\., ]+)/i);
   if (lb) {
-    const raw = lb[1].replace(/[^\d.,]/g,'').replace(/\s+/g,'');
-    // 6,100 oder 6.100 → nach Zahl wandeln
-    const num = parseInt(raw.replace(/[^\d]/g,''), 10);
+    const raw = lb[1].replace(/[^\d]/g,'');
+    const num = parseInt(raw, 10);
     if (Number.isFinite(num) && num>0) return num;
   }
-
-  // Alternative: nach "Lowest BIN" in Karten
   const lb2 = html.match(/"lowestBin"\s*:\s*([0-9]+)/i);
   if (lb2) {
     const num = parseInt(lb2[1], 10);
     if (Number.isFinite(num) && num>0) return num;
   }
-
   return null;
 }
 
-/** ---------- FUTDB-SUCHEN/MAPPEN ---------- **/
+/* ---------- FUTDB Suchen/Preise ---------- */
 async function futdbSearchByName(name, key){
   const q = encodeURIComponent(name);
   const attempt = await futdbTry([
@@ -140,10 +113,8 @@ async function futdbSearchByName(name, key){
   ], key);
   if (!attempt.ok) return null;
   const items = arrFromPayload(attempt.json);
-  if (!items.length) return null;
-  return items[0]; // best match
+  return items[0] || null;
 }
-
 async function futdbPlayersByPages(pages, limit, key){
   const out = [];
   for (let page=1; page<=pages; page++){
@@ -159,7 +130,6 @@ async function futdbPlayersByPages(pages, limit, key){
   }
   return out;
 }
-
 async function futdbPriceById(id, platform, key){
   const attempt = await futdbTry([
     `/players/${id}/price?platform=${platform}`,
@@ -174,7 +144,7 @@ async function futdbPriceById(id, platform, key){
   return { bin: price ?? null, route: attempt.base + attempt.path };
 }
 
-/** ---------- HELFER ---------- **/
+/* ---------- Helfer ---------- */
 function chemFor(pos){
   const p=(pos||'').toUpperCase();
   const atk=/ST|CF|LW|RW|LM|RM|CAM|CM|RF|LF/.test(p), def=/CB|LB|RB|LWB|RWB|CDM/.test(p);
@@ -184,7 +154,7 @@ function chemFor(pos){
 }
 const roundTo = (v,step)=>Math.round(v/step)*step;
 
-/** ---------- HANDLER ---------- **/
+/* ---------- Handler ---------- */
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin','*');
   res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
@@ -194,37 +164,34 @@ module.exports = async (req, res) => {
   const key = process.env.FUTDB_API_KEY || '';
   const q = req.query || {};
 
-  const mode = (q.mode || 'popular').toString(); // "popular" | "played" | "fodder"
+  const mode = (q.mode || 'popular').toString(); // popular | played | fodder
   const platform = (q.platform || 'ps').toString().toLowerCase(); // ps|xbox|pc
   const size = Math.max(1, Math.min(200, parseInt(q.size||'50',10)));
   const ovrMin = parseInt(q.ovrMin||'0',10);
   const ovrMax = parseInt(q.ovrMax||'99',10);
   const binMin = parseInt(q.binMin||'0',10);
   const binMax = parseInt(q.binMax||'9999999',10);
-  const discount = parseFloat(q.discount||'3');
+  const discount = parseFloat(q.discount||'3');     // Prozent
+  const prefer = (q.prefer||'auto').toString();     // auto | futdb | scraper
 
-  const minProfitSteps = [800,700,600,500];
+  const minProfitSteps = [800,700,600,500];         // „abwärts“ zulassen
 
   try{
-    if (!key) {
-      return res.status(200).json({ ok:false, error:'FUTDB_API_KEY missing in env', items:[] });
-    }
+    if (!key) return res.status(200).json({ ok:false, error:'FUTDB_API_KEY missing', items:[] });
 
     let candidates = [];
 
     if (mode==='popular' || mode==='played'){
-      // 1) FUT.GG Popular Liste → Namen
       const names = await getFutggPopular(size*3);
-      // 2) pro Name per FUTDB mappen (für OVR/Position & ID)
       for (const nm of names){
         const m = await futdbSearchByName(nm, key);
-        if (m) { candidates.push(m); }
-        else   { candidates.push({ name:nm, rating:null, position:'', id:null }); } // stub
+        candidates.push(
+          m || { name:nm, rating:null, position:'', id:null }
+        );
         if (candidates.length >= size*3) break;
         await sleep(60);
       }
     } else {
-      // FODDER (SBC): FUTDB-Pool & Filter
       const pool = await futdbPlayersByPages(10, 200, key);
       candidates = pool.filter(p=>{
         const o=+(p.rating||0); const pos=(p.position||'').toUpperCase();
@@ -234,7 +201,6 @@ module.exports = async (req, res) => {
       if (!candidates.length) candidates = pool.slice();
     }
 
-    // OVR-Filter nur anwenden, wenn OVR vorhanden (Popular-Stubs behalten)
     candidates = candidates.filter(p=>{
       const o = +(p.rating ?? p.ovr ?? 0);
       if (!o) return true;
@@ -255,23 +221,24 @@ module.exports = async (req, res) => {
         const ovr  = +(p.rating||p.ovr||0) || '';
         const id   = p.id || p.playerId || p._id || null;
 
-        // 1) Preis via FUTDATABASE (stabil)
         let bin = null, src='FUTDB', route=null;
-        if (id){
+
+        // 1) FUTDB-Preis (sofern erlaubt)
+        if (prefer!=='scraper' && id){
           try{
             const fp = await futdbPriceById(id, platform, key);
             bin = fp.bin; route = fp.route;
           }catch{}
         }
 
-        // 2) Fallback: FUT.GG Scraper
-        if (bin==null || !Number.isFinite(bin) || bin<=0){
-          const sbin = await getFutggBin(name, platform);
+        // 2) Fallback Scraper (oder erzwungen)
+        if ((bin==null || !Number.isFinite(bin) || bin<=0) && prefer!=='futdb'){
+          const sbin = await getFutggBin(name);
           if (sbin) { bin = sbin; src = 'SCRAPER'; }
         }
 
-        if (bin!=null && Number.isFinite(bin) && bin>0) priceHits++;
-        else continue;
+        if (bin==null || !Number.isFinite(bin) || bin<=0) continue;
+        priceHits++;
 
         if (bin < binMin || bin > binMax) continue;
 
@@ -280,13 +247,7 @@ module.exports = async (req, res) => {
         const profit = Math.floor(sell*0.95 - buy);
         if (profit < minProfit) continue;
 
-        out.push({
-          name, pos, ovr,
-          bin, src,
-          futdbPriceRoute: route || null,
-          chem: chemFor(pos),
-          buy, sell, profit
-        });
+        out.push({ name, pos, ovr, bin, src, futdbPriceRoute: route||null, chem: chemFor(pos), buy, sell, profit });
       }
 
       if (out.length >= Math.min(size,5)) break;
@@ -294,13 +255,7 @@ module.exports = async (req, res) => {
 
     out.sort((a,b)=>b.profit-a.profit);
 
-    return res.status(200).json({
-      ok:true,
-      mode, platform, size,
-      priceHits,
-      items: out
-    });
-
+    return res.status(200).json({ ok:true, mode, platform, size, priceHits, items: out });
   }catch(e){
     return res.status(200).json({ ok:false, error: e.message.slice(0,250), items:[] });
   }
