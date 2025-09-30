@@ -16,14 +16,25 @@ async function fetchText(url){
 
 function parseLowestBin(html){
   if(!html) return null;
-  // Versuche mehrere Muster – FUT.GG ändert HTML gelegentlich
-  // 1) "LOWEST BIN" gefolgt von Zahl
-  let m = html.match(/LOWEST\s*BIN[\s\S]{0,120}?(\d{1,3}(?:[.,]\d{3})+)/i);
+
+  // 1) Versuche Pattern mit "Lowest BIN" groß/klein
+  let m = html.match(/Lowest\s*BIN[^0-9]{0,20}(\d{1,3}(?:[.,]\d{3})*)/i);
   if(m) return toCoins(m[1]);
-  // 2) data-lowest-bin="5700" oder ähnlich
-  m = html.match(/lowest[^>]{0,30}?(\d{3,7})/i);
+
+  // 2) Suche nach JSON-Snippet mit lowestPrice oder lowest_bin
+  m = html.match(/"lowest(?:Price|_bin)"\s*:\s*(\d+)/i);
   if(m) return toCoins(m[1]);
+
+  // 3) Fallback: Zahl in Nähe von "BIN" oder "Buy Now"
+  m = html.match(/BIN[^0-9]{0,20}(\d{1,3}(?:[.,]\d{3})*)/i);
+  if(m) return toCoins(m[1]);
+
+  m = html.match(/Buy\s*Now[^0-9]{0,20}(\d{1,3}(?:[.,]\d{3})*)/i);
+  if(m) return toCoins(m[1]);
+
   return null;
+}
+
 }
 function toCoins(s){
   if(!s) return null;
