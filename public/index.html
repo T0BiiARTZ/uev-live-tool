@@ -88,7 +88,7 @@ async function api(path){
   const t = await r.text(); try { return JSON.parse(t); } catch { return {raw:t}; }
 }
 
-// robuste Tests
+// FUTDB ok? Scraper ok?
 async function testAPI(){
   try{
     setStatus('Teste API…');
@@ -102,12 +102,12 @@ async function testAPI(){
   }
 }
 
-// Kandidaten aus FUTDATABASE wählen (Meta-ish)
+// Kandidaten: großzüger (OVR 75–86, sinnvolle Positionen). Fallback: nimm einfach die ersten N.
 function looksMeta(p){
   const o = +(p.rating||p.ovr||0);
   const pos = (p.position||'').toUpperCase();
   const okPos = /ST|CF|LW|RW|LM|RM|CAM|CM|CDM|CB|LB|RB|GK/.test(pos);
-  return o>=80 && o<=84 && okPos;
+  return o>=75 && o<=86 && okPos;
 }
 
 async function createList(){
@@ -121,26 +121,26 @@ async function createList(){
   setStatus('Lade Spieler (Proxy)…');
 
   try{
-    // *** WICHTIG: Spieler via Proxy holen (kein direkter FUTDATABASE-Call) ***
     const j = await api('/api/futdb?type=players');
-    const arrAll = (j && (j.items||j.data)) ? (j.items||j.data) : [];
-    const arr = arrAll.filter(looksMeta).slice(0, size*2 || 100); // etwas mehr laden, dann filtern
+    const all = (j && (j.items||j.data)) ? (j.items||j.data) : [];
+    if(!all.length){ setStatus('Spieler-Endpoint leer.'); return; }
 
-    if(!arr.length){ setStatus('Keine passenden Spieler gefunden.'); return; }
+    let cand = all.filter(looksMeta);
+    if (!cand.length) cand = all.slice();               // Fallback: nimm alle
+    cand = cand.slice(0, Math.min(cand.length, size*3 || 150)); // etwas Überhang
 
-    tbody.innerHTML=''; let used=0;
+    const rows = [];
 
-    for (const p of arr){
-      if (used >= size) break;
-
-      // 1) optionaler Preis via FUTDATABASE (falls Plan erlaubt)
+    // Preis + Buy/Sell/Profit holen/berechnen
+    for (const p of cand){
+      // 1) FUTDB Preis (wenn Plan erlaubt)
       let bin = null;
       try {
         const pj = await api(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id||p.playerId)}&platform=${plat}`);
         if (pj && (pj.lowestBin||pj.bin||pj.price)) bin = pj.lowestBin||pj.bin||pj.price;
       } catch {}
 
-      // 2) Fallback: Scraper FUT.GG (Proxy-Route)
+      // 2) Scraper Fallback
       if (bin===null){
         try{
           const sj = await api(`/api/price-scrape?name=${encodeURIComponent(p.name||'')}&platform=${plat}`);
@@ -149,31 +149,53 @@ async function createList(){
       }
 
       const hasPrice = bin!==null && isFinite(bin) && bin>0;
-      let buy='—', sell='—', profit='—';
+      let buy=null, sell=null, profit=null;
       if (hasPrice){
         buy = roundTo(bin*(1 - discount/100), 100);
-        const targetProfit = 1000; // ~1k nach Tax
+        const targetProfit = 1000; // nach Tax ~1k
         sell = roundTo((buy + targetProfit) / 0.95, 100);
         profit = Math.floor(sell*0.95 - buy);
-        if (bin>budget || profit<800) continue;
+        if (bin>budget || profit<800) continue; // nur sinnvolle Deals
       }
 
-      const tr=document.createElement('tr');
-      tr.innerHTML = `
-        <td>${p.name||'-'}</td>
-        <td>${p.position||'-'}</td>
-        <td>${p.rating||p.ovr||'-'}</td>
-        <td>${hasPrice ? bin.toLocaleString('de-DE') : '—'}</td>
-        <td>${chemFor(p.position)}</td>
-        <td>${hasPrice ? Number(buy).toLocaleString('de-DE') : '—'}</td>
-        <td>${hasPrice ? Number(sell).toLocaleString('de-DE') : '—'}</td>
-        <td>${hasPrice ? ('+'+Number(profit).toLocaleString('de-DE')) : '—'}</td>`;
-      tbody.appendChild(tr);
-      used++;
+      rows.push({
+        name:p.name||'-', pos:p.position||'-', ovr:(p.rating||p.ovr||'-'),
+        bin: hasPrice?bin:null,
+        chem: chemFor(p.position),
+        buy, sell, profit
+      });
+
+      if (rows.length >= size) break;
     }
 
-    if(!tbody.children.length){
-      tbody.innerHTML = '<tr><td colspan="8">Keine Ergebnisse (Preisquelle liefert nichts oder Filter zu streng).</td></tr>';
+    // Sortiere nach höchstem Profit (Preislose kommen nach hinten)
+    rows.sort((a,b)=>{
+      if (a.profit==null && b.profit==null) return 0;
+      if (a.profit==null) return 1;
+      if (b.profit==null) return -1;
+      return b.profit - a.profit;
+    });
+
+    // Tabelle ausgeben
+    tbody.innerHTML='';
+    if(!rows.length){
+      tbody.innerHTML = '<tr><td colspan="8">Keine Ergebnisse. (Preisquelle liefert nichts oder Filter zu streng.)</td></tr>';
+      setStatus('Keine Deals gefunden.', false);
+      return;
+    }
+    for (const r of rows){
+      const tr=document.createElement('tr');
+      tr.innerHTML = `
+        <td>${r.name}</td>
+        <td>${r.pos}</td>
+        <td>${r.ovr}</td>
+        <td>${r.bin!=null ? r.bin.toLocaleString('de-DE') : '—'}</td>
+        <td>${r.chem}</td>
+        <td>${r.buy!=null ? r.buy.toLocaleString('de-DE') : '—'}</td>
+        <td>${r.sell!=null ? r.sell.toLocaleString('de-DE') : '—'}</td>
+        <td>${r.profit!=null ? ('+'+r.profit.toLocaleString('de-DE')) : '—'}</td>
+      `;
+      tbody.appendChild(tr);
     }
     setStatus('Fertig.', true);
   }catch(e){
