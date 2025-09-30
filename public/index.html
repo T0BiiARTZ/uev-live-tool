@@ -11,12 +11,18 @@
     th { background:#222; }
     button { background:#f90; border:none; padding:10px 16px; cursor:pointer; font-weight:bold; border-radius:6px; }
     input, select { padding:8px; margin:4px; background:#222; color:#fff; border:1px solid #444; border-radius:4px; }
+    #status { margin:10px 0; color:#bbb; }
+    .err { color:#ff7777; }
+    .ok { color:#6be27a; }
   </style>
 </head>
 <body>
   <div class="box">
     <h2>ÜV-Listen-Generator (Live via FUTDATABASE)</h2>
     <p>EA-Tax 5 %, Zielprofit ~1.000, Mindestprofit 800, Rundung 100 • Buy = BIN – Abschlag%</p>
+
+    <div id="status">Bereit.</div>
+
     <div>
       <label>Plattform</label>
       <select id="platform">
@@ -30,9 +36,10 @@
       <input type="number" id="size" value="100">
       <label>Marktpreis-Abschlag (%)</label>
       <input type="number" id="discount" value="3">
-      <button onclick="createList()">Erstellen</button>
-      <button onclick="testAPI()">API testen</button>
+      <button id="btnMake">Erstellen</button>
+      <button id="btnTest">API testen</button>
     </div>
+
     <table id="table">
       <thead>
         <tr><th>Spieler</th><th>Pos</th><th>OVR</th><th>BIN</th><th>Chemstyle</th><th>Kaufpreis</th><th>Verkaufspreis</th><th>Profit</th></tr>
@@ -40,40 +47,77 @@
       <tbody></tbody>
     </table>
   </div>
+
 <script>
-async function testAPI(){
-  const r = await fetch('/api/futdb?type=test');
-  const j = await r.json();
-  alert('API erreichbar: ' + JSON.stringify(j));
+const statusEl = document.getElementById('status');
+
+function setStatus(text, ok=false){
+  statusEl.className = ok ? 'ok' : 'err';
+  statusEl.textContent = text;
 }
-async function createList(){
-  const plat = document.getElementById('platform').value;
-  const budget = parseInt(document.getElementById('budget').value);
-  const size = parseInt(document.getElementById('size').value);
-  const discount = parseInt(document.getElementById('discount').value);
-  const r = await fetch('/api/futdb?type=players');
-  const j = await r.json();
-  if(!j || !j.items){ alert('Fehler beim Laden der Spieler'); return; }
-  const tbody = document.querySelector('#table tbody');
-  tbody.innerHTML='';
-  let used=0;
-  for(const p of j.items){
-    if(used>=size) break;
-    const pr = await fetch('/api/futdb?type=price&playerId='+p.id+'&platform='+plat);
-    const pj = await pr.json();
-    if(!pj || !pj.lowestBin) continue;
-    const bin = pj.lowestBin;
-    if(bin<=0 || bin>budget) continue;
-    const buy = Math.floor(bin*(1-discount/100)/100)*100;
-    const sell = bin;
-    const profit = Math.floor(sell*0.95 - buy);
-    if(profit<800) continue;
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td>'+p.name+'</td><td>'+p.position+'</td><td>'+p.rating+'</td><td>'+bin+'</td><td>'+ (p.chemistry_style || '-') +'</td><td>'+buy+'</td><td>'+sell+'</td><td>'+profit+'</td>';
-    tbody.appendChild(tr);
-    used++;
+
+async function testAPI(){
+  try{
+    setStatus('Teste API…');
+    const r = await fetch('/api/futdb?type=test', { cache: 'no-store' });
+    const txt = await r.text();
+    let j=null; try{ j=JSON.parse(txt);}catch{}
+    alert('API antwortet: ' + (j ? JSON.stringify(j) : txt.slice(0,180)));
+    setStatus('API-Test abgeschlossen.', true);
+  }catch(e){
+    alert('API-Fehler: ' + e.message);
+    setStatus('API-Fehler: ' + e.message);
   }
 }
+
+async function createList(){
+  const plat = document.getElementById('platform').value;
+  const budget = parseInt(document.getElementById('budget').value||'0',10);
+  const size = parseInt(document.getElementById('size').value||'0',10);
+  const discount = parseFloat(document.getElementById('discount').value||'0');
+  const tbody = document.querySelector('#table tbody');
+  tbody.innerHTML = '<tr><td colspan="8">Erzeuge Liste…</td></tr>';
+  setStatus('Lade Spieler…');
+
+  try{
+    const r = await fetch('/api/futdb?type=players', { cache: 'no-store' });
+    const txt = await r.text();
+    let j=null; try{ j=JSON.parse(txt);}catch{}
+    if(!j || !(j.items||j.data)){ setStatus('Spieler-Endpunkt liefert nichts: ' + txt.slice(0,140)); return; }
+    const arr = j.items || j.data;
+    tbody.innerHTML='';
+    let used=0;
+    for(const p of arr){
+      if(used>=size) break;
+      const pr = await fetch(`/api/futdb?type=price&playerId=${encodeURIComponent(p.id||p.playerId)}&platform=${plat}`, { cache: 'no-store' });
+      const ptxt = await pr.text();
+      let pj=null; try{ pj=JSON.parse(ptxt);}catch{}
+      const bin = pj && (pj.lowestBin||pj.bin||pj.price) ? (pj.lowestBin||pj.bin||pj.price) : null;
+
+      // Ohne Preis: Skipp oder zeig "—"
+      if(bin===null){ continue; }
+
+      if(bin<=0 || bin>budget) continue;
+      const buy = Math.floor((bin*(1-discount/100))/100)*100;
+      const sell = bin; // simple: bei dir gern anpassen
+      const profit = Math.floor(sell*0.95 - buy);
+      if(profit<800) continue;
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${p.name||'-'}</td><td>${p.position||'-'}</td><td>${p.rating||p.ovr||'-'}</td><td>${bin}</td><td>${p.chemistry_style||'-'}</td><td>${buy}</td><td>${sell}</td><td>${profit}</td>`;
+      tbody.appendChild(tr);
+      used++;
+    }
+    setStatus('Fertig.', true);
+    if(!tbody.children.length){ tbody.innerHTML='<tr><td colspan="8">Keine Ergebnisse (Budget/Abschlag prüfen oder Preis-Endpunkt im Plan nicht verfügbar).</td></tr>'; }
+  }catch(e){
+    setStatus('Fehler: ' + e.message);
+    tbody.innerHTML='<tr><td colspan="8">Fehler beim Erstellen.</td></tr>';
+  }
+}
+
+document.getElementById('btnTest').addEventListener('click', testAPI);
+document.getElementById('btnMake').addEventListener('click', createList);
 </script>
 </body>
 </html>
